@@ -16,6 +16,42 @@ import { InMemorySpendStore, type DailySpend, type SpendStore } from '../store/S
 // instance is collected (or after dispose() is called).
 const _secrets = new WeakMap<RouteDockClient, string>()
 
+/**
+ * Normalize `spendCap.endpointCaps` keys to endpoint origins.
+ *
+ * `pay()` looks caps up with `new URL(url).origin`, an exact string match, so
+ * an unnormalized key such as "https://api.example.com/" or
+ * "https://API.example.com" never matched and its cap was skipped without any
+ * error. Reject keys that are not a bare origin, and keys that collide after
+ * normalization, rather than letting one cap silently overwrite another.
+ */
+function normalizeEndpointCaps(spendCap: SpendCap | undefined): SpendCap | undefined {
+  if (!spendCap?.endpointCaps) return spendCap
+
+  const normalized: Record<string, string> = {}
+  for (const [key, cap] of Object.entries(spendCap.endpointCaps)) {
+    let parsed: URL
+    try {
+      parsed = new URL(key)
+    } catch {
+      throw new RouteDockManifestError(`spendCap.endpointCaps key is not a valid URL: ${key}`)
+    }
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      throw new RouteDockManifestError(
+        `spendCap.endpointCaps key must be a bare origin with no path, query or hash: ${key}`,
+      )
+    }
+    if (Object.hasOwn(normalized, parsed.origin)) {
+      throw new RouteDockManifestError(
+        `spendCap.endpointCaps keys normalize to the same origin (${parsed.origin}): ${key}`,
+      )
+    }
+    normalized[parsed.origin] = cap
+  }
+
+  return { ...spendCap, endpointCaps: normalized }
+}
+
 export interface SpendCap {
   /** Maximum total USDC spend per day (decimal string, e.g. "1.00") */
   daily: string
@@ -24,6 +60,12 @@ export interface SpendCap {
    * Optional per-endpoint daily spend caps, keyed by endpoint origin URL
    * (e.g. "https://api.openai.com"). Checked before the global `daily` cap.
    * An endpoint not listed here is only subject to the global cap.
+   * Keys are normalized to their origin when the client is constructed, so a
+   * trailing slash, a differently cased host or an explicit default port still
+   * matches the origin computed from the request URL. A key that is not a bare
+   * origin (it has a path, query or hash), or two keys that normalize to the
+   * same origin, make the constructor throw instead of silently disabling the
+   * cap.
    * Both limits are enforced independently — hitting an endpoint cap does
    * not prevent spend on other endpoints, but all spend still counts toward
    * the global cap.
@@ -153,7 +195,7 @@ export class RouteDockClient {
     this.keypair =
       typeof config.wallet === 'string' ? Keypair.fromSecret(config.wallet) : config.wallet
     this.network = config.network
-    this.spendCap = config.spendCap
+    this.spendCap = normalizeEndpointCaps(config.spendCap)
     this.retryPolicy = config.retryPolicy
     // Only warn about non-durability when a spend cap is actually configured.
     this.spendStore = config.spendStore ?? new InMemorySpendStore({ warn: !!config.spendCap })

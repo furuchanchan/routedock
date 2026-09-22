@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 import { Keypair } from '@stellar/stellar-sdk'
 import { RouteDockClient, usdcToMicros } from '../RouteDockClient.js'
 import { InMemorySpendStore, FileSpendStore } from '../../store/SpendStore.js'
-import { RouteDockPolicyRejectError } from '../../errors.js'
+import { RouteDockManifestError, RouteDockPolicyRejectError } from '../../errors.js'
 import { signManifest } from '../../manifest/sign.js'
 import type { RouteDockManifest, PaymentResult } from '../../types.js'
 import { join } from 'node:path'
@@ -514,6 +514,114 @@ function fakeResult(mode: string, amount: string): PaymentResult {
     try {
       rmSync(tmpPath)
     } catch {}
+  }
+}
+
+// ── Test 10: Endpoint cap keys are normalized to their origin ─────────────────
+
+{
+  const makeClient = (endpointCaps: Record<string, string>): RouteDockClient =>
+    new RouteDockClient({
+      wallet: Keypair.random(),
+      network: 'testnet',
+      spendCap: { daily: '1.00', asset: 'USDC', endpointCaps },
+      spendStore: new InMemorySpendStore({ warn: false }),
+    })
+
+  const normalizedKeys = (client: RouteDockClient): string[] =>
+    Object.keys((client as any).spendCap.endpointCaps)
+
+  // A trailing slash, a differently cased host/scheme and an explicit default
+  // port all normalize to the same origin.
+  assert.deepEqual(normalizedKeys(makeClient({ 'https://api.example.com/': '0.001' })), [
+    'https://api.example.com',
+  ])
+  assert.deepEqual(normalizedKeys(makeClient({ 'HTTPS://API.Example.COM': '0.001' })), [
+    'https://api.example.com',
+  ])
+  assert.deepEqual(normalizedKeys(makeClient({ 'https://api.example.com:443': '0.001' })), [
+    'https://api.example.com',
+  ])
+
+  // Non-origin or unparseable keys are rejected instead of silently inactive.
+  assert.throws(() => makeClient({ 'not a url': '0.001' }), (err: any) => {
+    assert.ok(err instanceof RouteDockManifestError)
+    assert.ok(err.message.includes('not a url'), 'message must name the offending key')
+    return true
+  })
+  assert.throws(() => makeClient({ 'https://api.example.com/price': '0.001' }), (err: any) => {
+    assert.ok(err instanceof RouteDockManifestError)
+    assert.ok(err.message.includes('https://api.example.com/price'))
+    return true
+  })
+  assert.throws(
+    () => makeClient({ 'https://api.example.com': '0.001', 'https://api.example.com/': '0.002' }),
+    (err: any) => {
+      assert.ok(err instanceof RouteDockManifestError)
+      assert.ok(err.message.includes('https://api.example.com/'))
+      return true
+    },
+  )
+
+  // A spend cap without endpointCaps is passed through untouched.
+  const plain = new RouteDockClient({
+    wallet: Keypair.random(),
+    network: 'testnet',
+    spendCap: { daily: '1.00', asset: 'USDC' },
+    spendStore: new InMemorySpendStore({ warn: false }),
+  })
+  assert.equal((plain as any).spendCap.endpointCaps, undefined)
+
+  console.log('✓ Test 10: Endpoint cap keys are normalized to their origin')
+}
+
+// ── Test 11: A normalized (non-canonical) key still enforces the cap ──────────
+
+{
+  const { manifest } = makeManifest()
+  const server = await startTestServer(makeManifestHandler(manifest))
+
+  try {
+    const unnormalized = `${server.url}/`
+    const upperCased = unnormalized.toUpperCase()
+
+    for (const key of [unnormalized, upperCased]) {
+      const store = new InMemorySpendStore({ warn: false })
+      const client = new RouteDockClient({
+        wallet: Keypair.random(),
+        network: 'testnet',
+        spendCap: { daily: '1.00', asset: 'USDC', endpointCaps: { [key]: '0.0015' } },
+        spendStore: store,
+      })
+      stubTrustlineCache(client)
+
+      let chargePayCalled = false
+      ;(client as any).charge.pay = async () => {
+        chargePayCalled = true
+        return fakeResult('mpp-charge', '0.0008')
+      }
+
+      // First call succeeds (0.0008 <= 0.0015 endpoint cap)
+      await client.pay(`${server.url}/test`)
+      assert.equal(chargePayCalled, true, `first pay() should execute for key ${key}`)
+
+      // Second call exceeds the endpoint cap (0.0008 + 0.0008 > 0.0015)
+      chargePayCalled = false
+      let threw = false
+      try {
+        await client.pay(`${server.url}/test`)
+      } catch (err) {
+        threw = true
+        assert.ok(err instanceof RouteDockPolicyRejectError)
+        assert.equal((err as RouteDockPolicyRejectError).reason, 'local_endpoint_cap_exceeded')
+      }
+      assert.ok(threw, `endpoint cap must be enforced for key ${key}`)
+      assert.equal(chargePayCalled, false, 'charge.pay must NOT be called when the cap is exceeded')
+    }
+
+    console.log('✓ Test 11: Non-canonical endpoint cap keys still enforce the cap')
+  } finally {
+    await server.close()
   }
 }
 
