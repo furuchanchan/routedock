@@ -463,6 +463,11 @@ export class RouteDockClient {
       )
     }
 
+    // Same trustline preflight as pay()/preflight() — opening a session
+    // funds a channel on-chain, so a missing trustline must surface here
+    // rather than as a channel-open failure downstream.
+    await this._checkTrustline(manifest)
+
     const secret = _secrets.get(this)
     if (!secret) {
       throw new RouteDockManifestError(
