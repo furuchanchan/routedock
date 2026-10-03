@@ -17,6 +17,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { reconcileAbandonedSessions } from '@routedock/routedock/provider'
+import { recoveryOutcome } from './recovery-outcome.js'
 
 const SUPABASE_URL = process.env['SUPABASE_URL'] ?? ''
 const SUPABASE_SERVICE_KEY = process.env['SUPABASE_SERVICE_KEY'] ?? ''
@@ -75,12 +76,13 @@ async function main(): Promise<void> {
     }
 
     console.log()
-    if (stats.recoveredCount > 0) {
-      console.log('[SessionRecovery] ✓ Session recovery completed successfully')
-      process.exit(0)
-    } else if (stats.failedCount > 0) {
+    const outcome = recoveryOutcome(stats)
+    if (outcome === 'errors') {
       console.log('[SessionRecovery] ✗ Session recovery completed with errors')
       process.exit(1)
+    } else if (outcome === 'success') {
+      console.log('[SessionRecovery] ✓ Session recovery completed successfully')
+      process.exit(0)
     } else {
       console.log('[SessionRecovery] ✓ No orphaned sessions found')
       process.exit(0)
