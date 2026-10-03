@@ -187,6 +187,17 @@ function createSharedMemoryStore(): { get(k: string): Promise<unknown>; put(k: s
   }
 }
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 const { routedockHono } = await import('../hono.js')
 
 const manifest: RouteDockManifest = {
@@ -273,7 +284,7 @@ describe('routedockHono — real HTTP regression coverage for verified-only vouc
     const deleteRes = await app.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '5000', signature: 'ab'.repeat(64) }),
+      body: JSON.stringify(closeCredential('5000')),
     })
     assert.equal(deleteRes.status, 200)
     assert.equal(closeCalls.length, 1)
@@ -326,14 +337,15 @@ describe('routedockHono — real HTTP regression coverage for verified-only vouc
 
     // A brand-new app instance over the same store — no in-memory `record` of
     // its own — simulating a Durable Object recreated after eviction. A
-    // DELETE naming the same amount but a different (wrong) signature must
-    // still close with the persisted signature, proving loadPersistedRecord
-    // actually reads it back rather than trusting the request body.
+    // DELETE carrying a valid credential but naming a different signature
+    // must still close with the persisted signature, proving
+    // loadPersistedRecord actually reads it back rather than trusting the
+    // request body.
     const appB = buildApp({ sessionStore: sharedStore })
     const deleteRes = await appB.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(64) }),
+      body: JSON.stringify(closeCredential('5000')),
     })
     assert.equal(deleteRes.status, 200)
     assert.equal(closeCalls.length, 1)

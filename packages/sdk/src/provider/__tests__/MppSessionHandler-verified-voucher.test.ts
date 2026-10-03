@@ -59,6 +59,17 @@ mock.module('../mppCompatibility.js', {
   },
 })
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 const { routedock } = await import('../routedockMiddleware.js')
 
 const manifest: RouteDockManifest = {
@@ -206,7 +217,7 @@ describe('routedock (Express) — voucher state only from verified credentials',
       const res = await fetch(`${url}/price`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(32) }),
+        body: JSON.stringify(closeCredential('5000')),
       })
       assert.equal(res.status, 200)
       assert.equal(closeCalls.length, 1)

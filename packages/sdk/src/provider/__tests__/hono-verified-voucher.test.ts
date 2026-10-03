@@ -70,6 +70,17 @@ mock.module('../mppCompatibility.js', {
   },
 })
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 const { routedockHono } = await import('../hono.js')
 
 const manifest: RouteDockManifest = {
@@ -164,7 +175,7 @@ describe('routedockHono — voucher state only from verified credentials', () =>
     const res = await app.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '2000', signature: 'bb'.repeat(32) }),
+      body: JSON.stringify(closeCredential('2000')),
     })
     assert.equal(res.status, 200)
     assert.equal(closeCalls.length, 1)
@@ -246,7 +257,7 @@ describe('routedockHono — voucher state only from verified credentials', () =>
     const res = await app.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(32) }),
+      body: JSON.stringify(closeCredential('5000')),
     })
     assert.equal(res.status, 200)
     assert.equal(closeCalls.length, 1)
@@ -255,18 +266,16 @@ describe('routedockHono — voucher state only from verified credentials', () =>
     assert.deepEqual(closeCalls[0].signature, hexToBytesLocal('ff'.repeat(32)))
   })
 
-  it('a DELETE with no committed record and no matching client signature never closes', async () => {
+  it('a DELETE with no committed record and no credential is rejected 401 and never closes (#394)', async () => {
     const { app } = buildApp({})
-    // Nothing was ever committed (verification never succeeded) — a bare
-    // client-supplied body with an amount of 0 must not trigger a close.
+    // Nothing was ever committed and no close credential is supplied — the
+    // request must be rejected before any close is attempted.
     const res = await app.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({}),
     })
-    assert.equal(res.status, 200)
+    assert.equal(res.status, 401)
     assert.equal(closeCalls.length, 0)
-    const json = await res.json() as { closeTxHash: unknown }
-    assert.equal(json.closeTxHash, null)
   })
 })

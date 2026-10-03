@@ -27,6 +27,7 @@ import {
 import type { Method } from 'mppx'
 import { type ChannelStore, type OrphanedSessionInfo } from './MppSessionHandler.js'
 import { base64ToUtf8, hexToBytes } from './encoding.js'
+import { authenticateCloseRequest } from './close-auth.js'
 import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
@@ -391,7 +392,7 @@ export function mppSessionWsVerified(c: { get: (key: string) => unknown }): bool
 /** Contexts the shared session state is invoked with (subset of hono's Context). */
 interface DeleteContext {
   req: { json(): Promise<unknown> }
-  json: (data: unknown) => Response
+  json: (data: unknown, status?: number) => Response
 }
 interface SignalContext {
   req: { raw: { signal?: AbortSignal } }
@@ -600,7 +601,15 @@ function createMppSessionHandlerState(
         // empty or non-JSON body
       }
 
-      const bodyAmount = body?.amount ? BigInt(body.amount) : 0n
+      const auth = await authenticateCloseRequest({
+        body,
+        channelFactory: sessionPricing.channelFactory,
+        commitmentPublicKey: opts.commitmentPublicKey,
+        network: opts.network,
+        sourceAccount: payeeKeypair.publicKey(),
+      })
+      if (!auth.ok) return c.json({ error: auth.error }, auth.status)
+      const bodyAmount = auth.bodyAmount
       const recordAmount = record?.amount ?? 0n
       let closeAmount: bigint
       let closeSig: string

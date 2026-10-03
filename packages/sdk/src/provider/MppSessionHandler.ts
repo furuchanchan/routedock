@@ -12,6 +12,7 @@ import {
   withTypedChannelErrors,
   type ChannelVerifyCredential,
 } from './mppCompatibility.js'
+import { authenticateCloseRequest } from './close-auth.js'
 import type { Method } from 'mppx'
 
 /** Store shape extended with optional atomic update operation. */
@@ -46,6 +47,29 @@ type Network = 'testnet' | 'mainnet'
 const MPP_NETWORK: Record<Network, 'stellar:testnet' | 'stellar:pubnet'> = {
   testnet: 'stellar:testnet',
   mainnet: 'stellar:pubnet',
+}
+
+/**
+ * The close credential arrives in the DELETE body, but apps that never
+ * registered a JSON parser leave `req.body` undefined — read the raw stream
+ * (capped) so the credential is still available (#394). When a parser did
+ * run, `req.body` is used and the stream is already consumed.
+ */
+async function readDeleteBody(req: Request): Promise<unknown> {
+  if (req.body && typeof req.body === 'object') return req.body
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > 65536) return undefined
+    chunks.push(chunk as Buffer)
+  }
+  if (chunks.length === 0) return undefined
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return undefined
+  }
 }
 
 /** Why a live session was flagged as orphaned (never cleanly closed). */
@@ -263,8 +287,21 @@ export function createMppSessionHandler(opts: MppSessionHandlerOptions): Request
     try {
       if (req.method === 'DELETE') {
         await loadPersistedRecord()
-        const body = req.body as { amount?: string; signature?: string } | undefined
-        const bodyAmount = body?.amount ? BigInt(body.amount) : 0n
+        const body = (await readDeleteBody(req)) as
+          | { amount?: string; signature?: string }
+          | undefined
+        const auth = await authenticateCloseRequest({
+          body,
+          channelFactory: opts.channelFactory,
+          commitmentPublicKey: opts.commitmentPublicKey,
+          network: opts.network,
+          sourceAccount: payeeKeypair.publicKey(),
+        })
+        if (!auth.ok) {
+          res.status(auth.status).json({ error: auth.error })
+          return
+        }
+        const bodyAmount = auth.bodyAmount
         const recordAmount = record?.amount ?? 0n
         let closeAmount: bigint
         let closeSig: string

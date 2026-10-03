@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { describe, it, mock } from 'node:test'
 import { createServer } from 'node:http'
 import express from 'express'
 import type { Request, Response } from 'express'
@@ -13,6 +13,17 @@ const commitKeypair = Keypair.random()
 
 const ASSET_CONTRACT = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA'
 const CHANNEL_CONTRACT = 'CCK4XOW3YKQUEZFONUTINKMSNW7SNMRQZURME5U3UP7E6WNGK7UHUCAH'
+
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
 
 const manifest: RouteDockManifest = {
   routedock: '1.0',
@@ -204,7 +215,11 @@ describe('routedock (Express) — mpp-session flow', () => {
       pricing: { 'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT } },
     })
     try {
-      const res = await fetch(`${url}/price`, { method: 'DELETE' })
+      const res = await fetch(`${url}/price`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(closeCredential('0')),
+      })
       assert.equal(res.status, 200)
       const body = await res.json() as { closeTxHash: null }
       assert.equal(body.closeTxHash, null)

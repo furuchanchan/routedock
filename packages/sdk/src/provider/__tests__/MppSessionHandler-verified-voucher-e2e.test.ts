@@ -166,6 +166,17 @@ function buildCraftedHeader(json: Record<string, unknown>): string {
   return `Payment credential="${Buffer.from(JSON.stringify(json)).toString('base64')}"`
 }
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 const { routedock } = await import('../routedockMiddleware.js')
 
 const manifest: RouteDockManifest = {
@@ -260,7 +271,7 @@ describe('routedock (Express) — real HTTP regression coverage for verified-onl
       const deleteRes = await fetch(`${url}/price`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ amount: '5000', signature: 'ab'.repeat(64) }),
+        body: JSON.stringify(closeCredential('5000')),
       })
       assert.equal(deleteRes.status, 200)
       assert.equal(closeCalls.length, 1)

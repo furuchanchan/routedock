@@ -75,6 +75,17 @@ mock.module('../mppCompatibility.js', {
   },
 })
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 const { routedockHono } = await import('../hono.js')
 
 const manifest: RouteDockManifest = {
@@ -144,7 +155,7 @@ describe('routedockHono — orphan recovery on failed channel close', () => {
     const res = await app.request('/price', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '1', signature: 'deadbeef' }),
+      body: JSON.stringify(closeCredential('1')),
     })
     assert.equal(res.status, 500)
 

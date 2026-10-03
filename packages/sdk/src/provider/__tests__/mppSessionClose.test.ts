@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import { Hono } from 'hono'
 import { Keypair } from '@stellar/stellar-sdk'
 import { routedockHono } from '../hono.js'
@@ -10,6 +10,17 @@ const commitKeypair = Keypair.random()
 
 const ASSET_CONTRACT = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA'
 const CHANNEL_CONTRACT = 'CCK4XOW3YKQUEZFONUTINKMSNW7SNMRQZURME5U3UP7E6WNGK7UHUCAH'
+
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
 
 const manifest: RouteDockManifest = {
   routedock: '1.0',
@@ -63,7 +74,7 @@ test('MPP Session DELETE close prefers tracked higher voucher over lower body am
   const req = new Request('http://localhost/stream', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount: '0', signature: 'abcd' }),
+    body: JSON.stringify(closeCredential('0')),
   })
 
   const res = await app.request(req)

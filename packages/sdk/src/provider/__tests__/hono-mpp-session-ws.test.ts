@@ -55,6 +55,17 @@ mock.module('@stellar/mpp/channel/server', {
   },
 })
 
+// DELETE close requests now carry a real commitment credential (#394): fixed
+// prepare_commitment bytes and a signature from the channel's commitment key.
+const COMMITMENT_BYTES = Buffer.from('routedock-close-auth-test-bytes')
+mock.module('../commitment-sim.js', {
+  namedExports: { simulatePrepareCommitment: async () => COMMITMENT_BYTES },
+})
+const closeCredential = (amount: string) => ({
+  amount,
+  signature: commitKeypair.sign(COMMITMENT_BYTES).toString('hex'),
+})
+
 mock.module('mppx/server', {
   namedExports: {
     // @stellar/mpp re-exports these from mppx/server; every name the real
@@ -202,7 +213,7 @@ describe('routedockHono — mpp-session-ws', () => {
     const res = await app.request('/stream/orderbook', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: '1000', signature: 'ab'.repeat(64) }),
+      body: JSON.stringify(closeCredential('1000')),
     })
     assert.equal(res.status, 200)
     const body = (await res.json()) as { closeTxHash: string }
