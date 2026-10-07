@@ -6,6 +6,7 @@ import {
   RouteDockFacilitatorError,
   RouteDockNetworkError,
   parseRetryAfterMs,
+  httpStatusToError,
 } from '../errors.js'
 import { withRetry, backoffDelayMs, DEFAULT_RETRY_POLICY } from '../internal/retry.js'
 
@@ -297,6 +298,97 @@ describe('withRetry', () => {
       )
     } finally {
       console.error = originalConsoleError
+    }
+  })
+
+  it('clamps a large Retry-After hint to maxDelayMs', async () => {
+    const delays: number[] = []
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0)
+      return originalSetTimeout(fn, 0)
+    }) as typeof setTimeout
+
+    try {
+      await assert.rejects(
+        () =>
+          withRetry(
+            () => {
+              throw new RouteDockFacilitatorError('rate limited', 503, {
+                retryAfterMs: 3_600_000,
+              })
+            },
+            { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1_000 },
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof RouteDockFacilitatorError)
+          assert.equal(err.retryAfterMs, 3_600_000)
+          return true
+        },
+      )
+      assert.deepEqual(delays, [1000, 1000])
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
+  it('clamps Retry-After to the default 30s cap', async () => {
+    const delays: number[] = []
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0)
+      return originalSetTimeout(fn, 0)
+    }) as typeof setTimeout
+
+    try {
+      await assert.rejects(
+        () =>
+          withRetry(() => {
+            throw new RouteDockFacilitatorError('rate limited', 503, {
+              retryAfterMs: 3_600_000,
+            })
+          }),
+      )
+      assert.deepEqual(delays, [30_000, 30_000, 30_000])
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
+  it('clamps a Retry-After header end to end via httpStatusToError', async () => {
+    const delays: number[] = []
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0)
+      return originalSetTimeout(fn, 0)
+    }) as typeof setTimeout
+
+    const retryAfterNotices: number[] = []
+    try {
+      await assert.rejects(
+        () =>
+          withRetry(
+            () => {
+              throw httpStatusToError(
+                'busy',
+                503,
+                new Response(null, {
+                  status: 503,
+                  headers: { 'Retry-After': '86400' },
+                }),
+              )
+            },
+            {
+              onRetry: (_attempt, _err, nextDelayMs) => {
+                retryAfterNotices.push(nextDelayMs)
+              },
+            },
+          ),
+      )
+      assert.deepEqual(delays, [30_000, 30_000, 30_000])
+      assert.deepEqual(retryAfterNotices, [30_000, 30_000, 30_000])
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
     }
   })
 

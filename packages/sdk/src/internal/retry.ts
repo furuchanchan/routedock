@@ -6,7 +6,10 @@ export interface RetryPolicy {
   maxAttempts?: number
   /** Base delay for exponential backoff in ms. Default: 250. */
   baseDelayMs?: number
-  /** Maximum jittered backoff delay in ms. Default: 30000. */
+  /**
+   * Maximum delay slept before any retry in ms. Caps both the jittered
+   * exponential backoff and a server's `Retry-After` hint. Default: 30000.
+   */
   maxDelayMs?: number
   /** Called before each retry with the attempt number, error, and upcoming delay. */
   /**
@@ -47,7 +50,9 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Execute `fn` with exponential backoff on retryable RouteDockErrors.
- * Honors `retryAfterMs` from facilitator 429/503 responses when present.
+ * Honors `retryAfterMs` from facilitator 429/503 responses when present,
+ * clamped to `maxDelayMs` like the computed backoff — the raw server hint
+ * stays readable on the error itself.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -73,10 +78,10 @@ export async function withRetry<T>(
         throw err
       }
 
-      const delay =
-        err.retryAfterMs !== undefined
-          ? err.retryAfterMs
-          : backoffDelayMs(attempt, baseDelayMs, maxDelayMs)
+      const delay = Math.min(
+        err.retryAfterMs ?? backoffDelayMs(attempt, baseDelayMs, maxDelayMs),
+        maxDelayMs,
+      )
 
       if (onRetry) {
         try {
