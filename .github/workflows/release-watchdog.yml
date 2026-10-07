@@ -29,14 +29,19 @@ jobs:
           sha=$(echo "$run" | jq -r '.workflow_runs[0].head_sha // ""')
 
           echo "last completed Release run: $conclusion ${sha:0:8}"
+
+          existing=$(gh issue list --state open --label release \
+            --search "Release workflow is failing in:title" --json number --jq '.[0].number // empty')
+
           if [ "$conclusion" = "success" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Recovered — the most recent completed Release run succeeded on \`${sha:0:8}\`. $url"
+              gh issue close "$existing"
+            fi
             exit 0
           fi
 
           echo "::error::Release is $conclusion — nothing is publishing to npm. $url"
-
-          existing=$(gh issue list --state open --label release \
-            --search "Release workflow is failing in:title" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "Still \`$conclusion\` as of the daily watchdog — $url"
           else
