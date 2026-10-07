@@ -96,7 +96,7 @@ export interface EndpointDescriptor {
 
 /** Full RouteDock discovery manifest — served at /.well-known/routedock.json */
 export interface RouteDockManifest {
-  /** Manifest schema version (major.minor), e.g. "1.0", "1.1", "2.0" */
+  /** Manifest schema version (major.minor), e.g. "1.0", "1.1", "2.0". Clients reject a manifest whose major version is higher than the one they support; minors of a supported major stay accepted since minor bumps are additive. */
   routedock: string
   /**
    * Minimum SDK client version (major.minor) required to use this manifest.

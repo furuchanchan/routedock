@@ -22,6 +22,8 @@ const validator = new Validator(schema as unknown as Schema, '7')
 
 const SDK_VERSION = pkg.version as string
 
+const SUPPORTED_MANIFEST_MAJOR = 1
+
 function parseMajorMinor(version: string): [number, number] {
   const parts = version.split('.')
   return [Number.parseInt(parts[0] ?? '0', 10), Number.parseInt(parts[1] ?? '0', 10)]
@@ -38,6 +40,15 @@ function assertClientVersionSupported(manifest: RouteDockManifest, baseUrl: stri
   if (minVersion && isVersionBelow(SDK_VERSION, minVersion)) {
     throw new RouteDockClientVersionError(
       `SDK version ${SDK_VERSION} is below the minimum required version ${minVersion} for provider at ${baseUrl}. Please upgrade the SDK.`,
+    )
+  }
+}
+
+function assertManifestVersionSupported(manifest: RouteDockManifest, baseUrl: string): void {
+  const [major] = parseMajorMinor(manifest.routedock)
+  if (major > SUPPORTED_MANIFEST_MAJOR) {
+    throw new RouteDockClientVersionError(
+      `Manifest at ${baseUrl} declares routedock version ${manifest.routedock}, but this SDK only supports major version ${SUPPORTED_MANIFEST_MAJOR}.x. Please upgrade the SDK.`,
     )
   }
 }
@@ -314,6 +325,7 @@ export async function fetchManifest(
     // different anchor must still have the binding enforced.
     verifyManifestSignature(cached.manifest, expectedPayee)
     assertClientVersionSupported(cached.manifest, baseUrl)
+    assertManifestVersionSupported(cached.manifest, baseUrl)
     assertManifestValid(cached.manifest, baseUrl)
     assertManifestActive(cached.manifest, baseUrl)
     return cached.manifest
@@ -369,6 +381,7 @@ export async function fetchManifest(
     assertManifestValid(manifest, baseUrl)
     verifyManifestSignature(manifest, expectedPayee)
     assertClientVersionSupported(manifest, baseUrl)
+    assertManifestVersionSupported(manifest, baseUrl)
     assertManifestActive(manifest, baseUrl)
     manifestCache.set(baseUrl, { manifest, fetchedAt: Date.now(), expiresAt })
     return manifest
