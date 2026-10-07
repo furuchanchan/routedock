@@ -131,7 +131,7 @@ Once configured, ask Claude:
 > "Check my Stellar balance"
 > "List providers that offer price data"
 > "Pay for data from https://api-a.routedock.xyz/price with a max of 0.01 USDC"
-> "Open a session with https://api-b.routedock.xyz for streaming orderbook data"
+> "Open a session with https://api-b.routedock.xyz/stream/orderbook for streaming orderbook data"
 
 ## Implementation Details
 

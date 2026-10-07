@@ -241,7 +241,7 @@ describe('handleOpenSession', () => {
   it('opens a session and stores it in openSessions', async () => {
     const sessions = new Map()
     const result = await handleOpenSession(
-      { url: 'https://provider.example.com' },
+      { url: 'https://provider.example.com/stream/orderbook' },
       baseDeps({ openSessions: sessions }),
       'secret123',
     )
@@ -249,6 +249,7 @@ describe('handleOpenSession', () => {
     const body = parseResult(result) as any
     assert.equal(body.success, true)
     assert.equal(body.channel_id, 'CHAN1')
+    assert.equal(body.endpoint_url, 'https://provider.example.com/stream/orderbook')
     assert.ok(sessions.has('CHAN1'))
   })
 
@@ -272,6 +273,7 @@ describe('handleOpenSession', () => {
   it('passes when initial_deposit meets min_deposit', async () => {
     const fakeManifest = {
       pricing: { 'mpp-session': { min_deposit: '1.0' } },
+      endpoints: { stream: { method: 'GET', path: '/stream/orderbook' } },
     }
     const fetchManifest = async (_url: string) => ({
       json: async () => fakeManifest,
@@ -284,6 +286,191 @@ describe('handleOpenSession', () => {
     )
     assert.equal(result.isError, undefined)
     assert.ok(sessions.has('CHAN1'))
+  })
+
+  it('resolves a bare origin to the manifest stream endpoint', async () => {
+    let openedUrl: string | undefined
+    const client = makeClient({
+      openSession: (async (u: string) => {
+        openedUrl = u
+        return {
+          channelId: 'CHAN1',
+          openTxHash: 'OPEN_TX',
+          stream: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }),
+          close: async () => ({ closeTxHash: 'CLOSE_TX', totalPaid: '0.01', vouchersIssued: 3 }),
+        }
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => ({
+      json: async () => ({ endpoints: { stream: { method: 'GET', path: '/stream/orderbook' } } }),
+    })
+    const result = await handleOpenSession(
+      { url: 'https://provider.example.com' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(result.isError, undefined)
+    assert.equal(openedUrl, 'https://provider.example.com/stream/orderbook')
+    const body = parseResult(result) as any
+    assert.equal(body.endpoint_url, 'https://provider.example.com/stream/orderbook')
+  })
+
+  it('resolves a bare origin with trailing slash', async () => {
+    let openedUrl: string | undefined
+    const client = makeClient({
+      openSession: (async (u: string) => {
+        openedUrl = u
+        return {
+          channelId: 'CHAN1',
+          openTxHash: 'OPEN_TX',
+          stream: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }),
+          close: async () => ({ closeTxHash: 'CLOSE_TX', totalPaid: '0.01', vouchersIssued: 3 }),
+        }
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => ({
+      json: async () => ({ endpoints: { stream: { method: 'GET', path: '/stream/orderbook' } } }),
+    })
+    await handleOpenSession(
+      { url: 'https://provider.example.com/' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(openedUrl, 'https://provider.example.com/stream/orderbook')
+  })
+
+  it('resolves the single endpoint when no stream key exists', async () => {
+    let openedUrl: string | undefined
+    const client = makeClient({
+      openSession: (async (u: string) => {
+        openedUrl = u
+        return {
+          channelId: 'CHAN1',
+          openTxHash: 'OPEN_TX',
+          stream: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }),
+          close: async () => ({ closeTxHash: 'CLOSE_TX', totalPaid: '0.01', vouchersIssued: 3 }),
+        }
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => ({
+      json: async () => ({ endpoints: { data: { method: 'GET', path: '/data' } } }),
+    })
+    await handleOpenSession(
+      { url: 'https://provider.example.com' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(openedUrl, 'https://provider.example.com/data')
+  })
+
+  it('rejects a bare origin with ambiguous endpoints and never opens a session', async () => {
+    let openCalled = false
+    const client = makeClient({
+      openSession: (async () => {
+        openCalled = true
+        throw new Error('unreachable')
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => ({
+      json: async () => ({
+        endpoints: {
+          orderbook: { method: 'GET', path: '/stream/orderbook' },
+          trades: { method: 'GET', path: '/stream/trades' },
+        },
+      }),
+    })
+    const result = await handleOpenSession(
+      { url: 'https://provider.example.com' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(result.isError, true)
+    assert.equal(openCalled, false)
+    const body = parseResult(result) as any
+    assert.ok(body.error.includes('/stream/orderbook'))
+    assert.ok(body.error.includes('/stream/trades'))
+  })
+
+  it('rejects a manifest endpoint on a foreign origin', async () => {
+    let openCalled = false
+    const client = makeClient({
+      openSession: (async () => {
+        openCalled = true
+        throw new Error('unreachable')
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => ({
+      json: async () => ({
+        endpoints: { stream: { method: 'GET', path: 'https://attacker.example/x' } },
+      }),
+    })
+    const result = await handleOpenSession(
+      { url: 'https://provider.example.com' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(result.isError, true)
+    assert.equal(openCalled, false)
+  })
+
+  it('does not fetch the manifest for a full URL without initial_deposit', async () => {
+    let fetchCalls = 0
+    let openedUrl: string | undefined
+    const client = makeClient({
+      openSession: (async (u: string) => {
+        openedUrl = u
+        return {
+          channelId: 'CHAN1',
+          openTxHash: 'OPEN_TX',
+          stream: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }),
+          close: async () => ({ closeTxHash: 'CLOSE_TX', totalPaid: '0.01', vouchersIssued: 3 }),
+        }
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => {
+      fetchCalls++
+      return { json: async () => ({}) }
+    }
+    await handleOpenSession(
+      { url: 'https://provider.example.com/stream/orderbook' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(openedUrl, 'https://provider.example.com/stream/orderbook')
+    assert.equal(fetchCalls, 0)
+  })
+
+  it('fetches the manifest exactly once for a bare origin with initial_deposit', async () => {
+    let fetchCalls = 0
+    let openedUrl: string | undefined
+    const client = makeClient({
+      openSession: (async (u: string) => {
+        openedUrl = u
+        return {
+          channelId: 'CHAN1',
+          openTxHash: 'OPEN_TX',
+          stream: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }),
+          close: async () => ({ closeTxHash: 'CLOSE_TX', totalPaid: '0.01', vouchersIssued: 3 }),
+        }
+      }) as HandlerDeps['client']['openSession'],
+    })
+    const fetchManifest = async (_url: string) => {
+      fetchCalls++
+      return {
+        json: async () => ({
+          pricing: { 'mpp-session': { min_deposit: '1.0' } },
+          endpoints: { stream: { method: 'GET', path: '/stream/orderbook' } },
+        }),
+      }
+    }
+    const result = await handleOpenSession(
+      { url: 'https://provider.example.com', initial_deposit: '5.0' },
+      baseDeps({ client, fetchManifest }),
+      'secret123',
+    )
+    assert.equal(result.isError, undefined)
+    assert.equal(fetchCalls, 1)
+    assert.equal(openedUrl, 'https://provider.example.com/stream/orderbook')
   })
 
   it('reads min_deposit from mpp-session-ws when mpp-session is absent', async () => {

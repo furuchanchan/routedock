@@ -69,7 +69,7 @@ check against the provider's `min_deposit`, not a fund transfer. Pass the return
 `stream_session` and `close_session` — the channel's collateral cannot be settled otherwise.
 
 **Parameters:**
-- `url` (required): Base URL of the provider
+- `url` (required): The provider streaming endpoint URL (e.g., `https://api-b.routedock.xyz/stream/orderbook`). A bare provider origin is also accepted and resolved to an endpoint from the provider manifest.
 - `initial_deposit` (optional): Amount in USDC you intend the channel to be funded with
 
 **Returns:** `channel_id` and open transaction hash
@@ -145,7 +145,7 @@ Once configured, you can ask Claude to:
 > "Check my Stellar balance"
 > "List providers that offer price data"
 > "Pay for data from https://api-a.routedock.xyz/price with a max of 0.01 USDC"
-> "Open a session with https://api-b.routedock.xyz for streaming orderbook data"
+> "Open a session with https://api-b.routedock.xyz/stream/orderbook for streaming orderbook data"
 > "Pull the next few messages from that session"
 > "Close the session and settle the channel"
 
