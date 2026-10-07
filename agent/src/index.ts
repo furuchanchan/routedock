@@ -29,7 +29,10 @@ const STELLAR_NETWORK = (process.env['STELLAR_NETWORK'] ?? 'testnet') as 'testne
 const AGENT_SECRET = process.env['AGENT_SECRET'] ?? ''
 const PROVIDER_A_URL = (process.env['PROVIDER_A_URL'] ?? 'http://localhost:3001').replace(/\/$/, '')
 const PROVIDER_B_URL = (process.env['PROVIDER_B_URL'] ?? 'http://localhost:3002').replace(/\/$/, '')
-const AGENT_DAILY_CAP_USDC = process.env['AGENT_DAILY_CAP_USDC'] ?? '0.002'
+// Sized for the documented run: x402 (0.001) + MPP charge (0.0008) + 50 session
+// vouchers (50 x 0.0001) = 0.0068 must pass, and the next x402 must exceed it,
+// so the cap must sit in [0.0068, 0.0078) for the policy demo to fire at step 5.
+const AGENT_DAILY_CAP_USDC = process.env['AGENT_DAILY_CAP_USDC'] ?? '0.007'
 const COMMITMENT_SECRET = process.env['COMMITMENT_SECRET'] ?? ''
 const AGENT_SPEND_STORE_PATH =
   process.env['AGENT_SPEND_STORE_PATH'] ??
@@ -194,7 +197,14 @@ async function main(): Promise<void> {
 
       if (voucherCount >= TARGET_VOUCHERS) break
     }
+  } catch (err) {
+    // Session vouchers count against the daily cap — a cap-sized rejection
+    // mid-stream must not forfeit the close result and RUN_RESULTS.md.
+    if (!(err instanceof RouteDockPolicyRejectError)) throw err
+    log('mpp-session', `[Session] Stream stopped early by spend cap after ${voucherCount} vouchers (${err.reason}) — closing with what was received`)
+  }
 
+  try {
     log('mpp-session', `Consumed ${voucherCount} vouchers. Closing session...`)
     closeResult = await closeActiveSession(`consumed ${voucherCount} vouchers`)
   } finally {
@@ -218,8 +228,8 @@ async function main(): Promise<void> {
 
   // ── Step 5: Policy rejection ──────────────────────────────────────────────
 
-  // After steps 2+3, daily spend = 0.001 + 0.0008 = 0.0018 USDC.
-  // Daily cap = 0.002 USDC. Adding another 0.001 (x402 price) → 0.0028 > 0.002 → rejected.
+  // After steps 2-4, daily spend = 0.001 + 0.0008 + 50*0.0001 = 0.0068 USDC.
+  // Daily cap = 0.007 USDC. Adding another 0.001 (x402 price) → 0.0078 > 0.007 → rejected.
   log('policy', 'Attempting payment that exceeds daily cap...')
   let policyRejected = false
   try {

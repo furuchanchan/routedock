@@ -16,10 +16,10 @@
  * Environment Variables:
  *   STELLAR_NETWORK      Network to use (default: testnet)
  *   AGENT_SECRET         Stellar secret key (required, must start with S)
- *   COMMITMENT_SECRET    Ed25519 keypair for MPP session (optional)
+ *   COMMITMENT_SECRET    Ed25519 keypair for MPP session (required for session test)
  *   PROVIDER_A_URL       URL of price provider (default: http://localhost:3001)
  *   PROVIDER_B_URL       URL of orderbook provider (default: http://localhost:3002)
- *   AGENT_DAILY_CAP_USDC Daily spending cap in USDC (default: 0.002)
+ *   AGENT_DAILY_CAP_USDC Daily spending cap in USDC (default: 0.007)
  */
 
 import path from 'node:path'
@@ -34,7 +34,9 @@ const STELLAR_NETWORK = (process.env['STELLAR_NETWORK'] ?? 'testnet') as 'testne
 const AGENT_SECRET = process.env['AGENT_SECRET'] ?? ''
 const PROVIDER_A_URL = (process.env['PROVIDER_A_URL'] ?? 'http://localhost:3001').replace(/\/$/, '')
 const PROVIDER_B_URL = (process.env['PROVIDER_B_URL'] ?? 'http://localhost:3002').replace(/\/$/, '')
-const AGENT_DAILY_CAP_USDC = process.env['AGENT_DAILY_CAP_USDC'] ?? '0.002'
+// Cap sized so the full 50-voucher session passes (0.0068) but the trailing
+// x402 (+0.001 = 0.0078) trips it — mirrors the checklist run in agent/src/index.ts.
+const AGENT_DAILY_CAP_USDC = process.env['AGENT_DAILY_CAP_USDC'] ?? '0.007'
 const COMMITMENT_SECRET = process.env['COMMITMENT_SECRET'] ?? ''
 
 const TARGET_VOUCHERS = 50
@@ -212,7 +214,7 @@ async function runTests(): Promise<void> {
   // Calculate expected cumulative spend:
   // x402 (0.001) + mpp-charge (0.0008) + mpp-session (0.005 for 50 vouchers)
   // = 0.0068 USDC
-  // Adding another x402 (0.001) = 0.0078, which is way over cap of 0.002
+  // Adding another x402 (0.001) = 0.0078, which is over cap of 0.007
   // So it should be rejected locally.
 
   let policyRejected = false

@@ -34,7 +34,7 @@ stellar tx new --source agent-key --network testnet \
 
 ### 3. Confirm AGENT_VAULT_CONTRACT_ID
 
-The contract was deployed in Phase 1. Verify the value from `AGENT_PROGRESS.md`:
+The contract was deployed in Phase 1. It is already pinned in `agent/.env.example` (the id below) — only set it if the agent signs through the vault contract instead of a plain keypair:
 
 ```
 AGENT_VAULT_CONTRACT_ID=CAX5IDLC2XHGQSEA2YN3LPLZ7EXLMRXYX3HFJGKFXS6B7OQXBKWO44LT
@@ -81,13 +81,16 @@ cp agent/.env.example agent/.env
 Required values in each:
 - `apps/provider-a/.dev.vars`: `STELLAR_PAYEE_SECRET`, `STELLAR_PAYEE_ADDRESS`, `OPENZEPPELIN_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
 - `apps/provider-b/.dev.vars`: Same + `CHANNEL_CONTRACT_ID`, `COMMITMENT_PUBLIC_KEY`
-- `agent/.env`: `AGENT_SECRET`, `AGENT_VAULT_CONTRACT_ID`, `PROVIDER_A_URL`, `PROVIDER_B_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+- `agent/.env`: `AGENT_SECRET`, `COMMITMENT_SECRET`, `PROVIDER_A_URL`, `PROVIDER_B_URL` (the `start`/`dev` scripts load it via `node --env-file-if-exists`; `AGENT_VAULT_CONTRACT_ID` is optional and the agent never reads `SUPABASE_*`)
+
+> Same-day re-runs: spend totals persist per UTC day in `~/.routedock/spend.json`. A second run starts with the first run's spend already counted — point `AGENT_SPEND_STORE_PATH` at a fresh path (or delete the file) to reset.
 
 ---
 
 ## Build Everything
 
 ```bash
+pnpm --filter @routedock/nulth-sdk build   # required first — @routedock/routedock depends on its dist/
 pnpm --filter @routedock/routedock build
 pnpm --filter provider-a build
 pnpm --filter provider-b build
@@ -98,16 +101,18 @@ pnpm --filter agent build
 
 ## Start Providers (two separate terminals)
 
+Neither provider package has a `start` script — run `wrangler dev` and pin the port the agent expects (`wrangler dev` defaults to 8787):
+
 **Terminal 1 — Provider A:**
 ```bash
-pnpm --filter provider-a start
+pnpm --filter provider-a dev -- --port 3001
 # Verify: curl http://localhost:3001/health
 # Verify: curl http://localhost:3001/.well-known/routedock.json
 ```
 
 **Terminal 2 — Provider B:**
 ```bash
-pnpm --filter provider-b start
+pnpm --filter provider-b dev -- --port 3002
 # Verify: curl http://localhost:3002/health
 # Verify: curl http://localhost:3002/.well-known/routedock.json
 ```
@@ -126,15 +131,15 @@ The agent will:
 1. Log its address and starting USDC balance
 2. Round 1: x402 query → logs `txHash` (x402 settlement)
 3. Round 2: MPP charge query → logs `txHash` (MPP charge)
-4. Round 3: MPP session → logs channel open `txHash`, 50 vouchers, then settlement `txHash`
+4. Round 3: MPP session → 50 vouchers, then settlement `txHash` (channel-open `txHash` only when the channel is not pre-deployed)
 5. Round 4: Policy rejection → logs rejection reason, confirms nothing on-chain
-6. Write `agent/RUN_RESULTS.md` with all 4 hashes
+6. Write `agent/RUN_RESULTS.md` with the run's hashes (3 or 4 — see below)
 
-Expected `agent/RUN_RESULTS.md` output:
+Expected `agent/RUN_RESULTS.md` output — note the channel-open row reads `NO TX` when the channel is pre-deployed (the SDK reports `openTxHash: null` in that case), so the run may produce 3 hashes rather than 4:
 ```
 x402_settlement_tx: [HASH-1]
 mpp_charge_tx:      [HASH-2]
-channel_open_tx:    [HASH-3]
+channel_open_tx:    NO TX (pre-deployed channel) — or [HASH-3]
 channel_close_tx:   [HASH-4]
 ```
 
@@ -144,7 +149,7 @@ channel_close_tx:   [HASH-4]
 
 ### 7. Update README.md with real hashes
 
-Open `README.md`, find the "Live Testnet Transactions" table, replace all `[REPLACE WITH REAL HASH]` values with the 4 hashes from `agent/RUN_RESULTS.md`.
+Open `README.md`, find the "Live Testnet Transactions" table, and replace the hash cells with the fresh hashes from `agent/RUN_RESULTS.md` (skipping `channel_open_tx` if it is `NO TX`).
 
 ### 8. Verify each hash on Stellar Expert
 
@@ -157,6 +162,6 @@ Open `README.md`, find the "Live Testnet Transactions" table, replace all `[REPL
 https://stellar.expert/explorer/testnet/tx/[HASH]
 ```
 
-### 9. Update AGENT_PROGRESS.md
+### 9. Record the hashes
 
-Copy all 4 hashes into `AGENT_PROGRESS.md` under a "T22/T23: completed" section.
+Copy the run's hashes into your progress notes under a "T22/T23: completed" section (`AGENT_PROGRESS.md` is gitignored, so keep them wherever you track submission state).
