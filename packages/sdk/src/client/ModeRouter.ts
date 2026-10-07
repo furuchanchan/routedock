@@ -150,6 +150,28 @@ export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: strin
   }
 }
 
+/**
+ * Enforce that the manifest's declared `network` matches the network the
+ * client is configured for. Without this check a mainnet client pointed at a
+ * testnet-declared provider (staging URL, misrouted registry) would sign and
+ * pay on mainnet while the provider settles on testnet — a real payment for a
+ * service that can never be delivered.
+ *
+ * `expectedNetwork` is per-caller, like `expectedPayee`: callers that do not
+ * pin a network remain permissive.
+ */
+export function assertManifestNetwork(
+  manifest: RouteDockManifest,
+  expectedNetwork?: 'testnet' | 'mainnet',
+  baseUrl?: string,
+): void {
+  if (expectedNetwork === undefined || manifest.network === expectedNetwork) return
+  const context = baseUrl ? ` at ${baseUrl}` : ''
+  throw new RouteDockManifestError(
+    `Invalid manifest${context}: declares network '${manifest.network}' but the client is configured for '${expectedNetwork}'`,
+  )
+}
+
 interface CacheEntry {
   manifest: RouteDockManifest
   fetchedAt: number
@@ -306,15 +328,19 @@ export async function fetchManifest(
   retryPolicy?: RetryPolicy,
   manifestTimeoutMs = DEFAULT_MANIFEST_TIMEOUT_MS,
   expectedPayee?: string,
+  expectedNetwork?: 'testnet' | 'mainnet',
 ): Promise<RouteDockManifest> {
   const cached = manifestCache.get(baseUrl)
   if (cached && Date.now() < cached.expiresAt) {
     // Re-assert the trust anchor even on cache hits: the manifest content is
     // immutable, but `expectedPayee` is per-caller, so a caller with a
-    // different anchor must still have the binding enforced.
+    // different anchor must still have the binding enforced. The same holds
+    // for `expectedNetwork`: a shared cache entry must not leak a mismatched
+    // manifest to a caller configured for a different network.
     verifyManifestSignature(cached.manifest, expectedPayee)
     assertClientVersionSupported(cached.manifest, baseUrl)
     assertManifestValid(cached.manifest, baseUrl)
+    assertManifestNetwork(cached.manifest, expectedNetwork, baseUrl)
     assertManifestActive(cached.manifest, baseUrl)
     return cached.manifest
   }
@@ -367,6 +393,7 @@ export async function fetchManifest(
 
     const manifest = raw as unknown as RouteDockManifest
     assertManifestValid(manifest, baseUrl)
+    assertManifestNetwork(manifest, expectedNetwork, baseUrl)
     verifyManifestSignature(manifest, expectedPayee)
     assertClientVersionSupported(manifest, baseUrl)
     assertManifestActive(manifest, baseUrl)
