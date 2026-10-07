@@ -3,7 +3,7 @@ import { stellar } from '@stellar/mpp/charge/server'
 import { Mppx, Request as MppxRequest } from 'mppx/server'
 import type { RouteDockManifest } from '../types.js'
 import { resolvePayee } from './payee.js'
-import { extractPayerAddress } from './payer.js'
+import { parsePaymentCredential } from './payment-credential.js'
 import type { SessionStore } from '../store/SessionStore.js'
 import {
   InMemorySeenTxStore,
@@ -54,32 +54,6 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // Extract payer public key from the mppx Payment authorization header before
-      // the mppx library consumes it. The Payment bearer credential JSON contains
-      // a `sender` field with the payer's Stellar G... public key.
-      let payerAddress: string | null = null
-      try {
-        const authHeader = req.headers['authorization']
-        if (typeof authHeader === 'string' && authHeader.startsWith('Payment ')) {
-          const credPart = authHeader
-            .replace(/^Payment\s+/, '')
-            .split(',')
-            .find((p) => p.trim().startsWith('credential='))
-          if (credPart) {
-            const b64 = credPart.split('=').slice(1).join('=').replace(/^"|"$/g, '')
-            const credJson = Buffer.from(b64, 'base64').toString('utf8')
-            const cred = JSON.parse(credJson) as {
-              sender?: string
-              payload?: { sender?: string; from?: string }
-            }
-            const key = cred.sender ?? cred.payload?.sender ?? cred.payload?.from
-            payerAddress = extractPayerAddress(key)
-          }
-        }
-      } catch {
-        // non-fatal — payer extraction is best-effort
-      }
-
       // Idempotency: a retry of an already-settled charge replays the cached
       // receipt headers instead of settling (and billing) a second time.
       const idempotencyKey = await paymentIdempotencyKey((name) => {
@@ -123,7 +97,13 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
         return
       }
 
-      // status 200 — payment verified
+      // status 200 — payment verified; the credential's payer attribution is
+      // safe to record now.
+      const authHeader = req.headers['authorization']
+      const payerAddress =
+        parsePaymentCredential(typeof authHeader === 'string' ? authHeader : undefined)
+          ?.payer ?? null
+
       const receipt = result.withReceipt!(new Response(''))
       const receiptHeaders: Record<string, string> = {}
       receipt.headers.forEach((v: string, k: string) => {

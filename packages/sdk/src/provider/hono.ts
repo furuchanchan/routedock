@@ -18,6 +18,7 @@ import { signManifest } from '../manifest/sign.js'
 import { resolvePayee } from './payee.js'
 import { usdcToUnits } from '../internal/usdc.js'
 import { extractPayerAddress } from './payer.js'
+import { parsePaymentCredential } from './payment-credential.js'
 import { channelAuthorizer, withTypedChannelErrors } from './mppCompatibility.js'
 import type { Method } from 'mppx'
 import { type ChannelStore, type OrphanedSessionInfo, isVoucherStoreValue } from './MppSessionHandler.js'
@@ -258,30 +259,6 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
 
   return async (c, next) => {
     try {
-      // Extract payer public key from the mppx Payment authorization header.
-      let payerAddress: string | null = null
-      try {
-        const authHeader = c.req.header('authorization')
-        if (authHeader?.startsWith('Payment ')) {
-          const credPart = authHeader
-            .replace(/^Payment\s+/, '')
-            .split(',')
-            .find((p) => p.trim().startsWith('credential='))
-          if (credPart) {
-            const b64 = credPart.split('=').slice(1).join('=').replace(/^"|"$/g, '')
-            const credJson = base64ToUtf8(b64)
-            const cred = JSON.parse(credJson) as {
-              sender?: string
-              payload?: { sender?: string; from?: string }
-            }
-            const key = cred.sender ?? cred.payload?.sender ?? cred.payload?.from
-            payerAddress = extractPayerAddress(key)
-          }
-        }
-      } catch {
-        // non-fatal
-      }
-
       // Idempotency: a retry of an already-settled charge replays the cached
       // receipt headers instead of settling (and billing) a second time.
        const idempotencyKey = await paymentIdempotencyKey((name) => c.req.header(name))
@@ -326,6 +303,11 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
         challenge.headers.forEach((v: string, k: string) => { headers[k] = v })
         return new Response(await challenge.text(), { status: 402, headers })
       }
+
+      // Payment verified (the 402 challenge path returned above) — the
+      // credential's payer attribution is safe to record now.
+      const payerAddress =
+        parsePaymentCredential(c.req.header('authorization'))?.payer ?? null
 
       const receipt = result.withReceipt!(new Response(''))
       const receiptHeaders: Record<string, string> = {}
@@ -595,31 +577,13 @@ function createMppSessionHandlerState(
     },
 
     extractPayer(c: AuthContext): void {
-      const authHeader = c.req.header('authorization')
-      if (!authHeader?.startsWith('Payment ')) return
-      try {
-        const credB64 = authHeader
-          .replace(/^Payment\s+/, '')
-          .split(',')
-          .find((p) => p.trim().startsWith('credential='))
-        if (credB64) {
-          const credJson = base64ToUtf8(
-            credB64.split('=').slice(1).join('=').replace(/^"|"$/g, ''),
-          )
-          const cred = JSON.parse(credJson) as {
-            sender?: string
-            payload?: { signature?: string; sender?: string; from?: string }
-          }
-          if (cred.payload?.signature) {
-            lastSignatureHex = cred.payload.signature
-          }
-          if (!sessionPayerAddress) {
-            const key = cred.sender ?? cred.payload?.sender ?? cred.payload?.from
-            sessionPayerAddress = extractPayerAddress(key)
-          }
-        }
-      } catch {
-        // non-fatal
+      const cred = parsePaymentCredential(c.req.header('authorization'))
+      if (!cred) return
+      if (cred.signature) {
+        lastSignatureHex = cred.signature
+      }
+      if (!sessionPayerAddress && cred.payer) {
+        sessionPayerAddress = cred.payer
       }
     },
 
@@ -653,8 +617,6 @@ function createMppSessionHonoHandler(
         return state.handleDelete(c as unknown as DeleteContext)
       }
 
-      state.extractPayer(c as unknown as AuthContext)
-
       const result = await (
         state.mppx as unknown as {
           channel: (o: { amount: string; description?: string }) => (
@@ -677,6 +639,11 @@ function createMppSessionHonoHandler(
         return new Response(await challenge.text(), { status: 402, headers })
       }
 
+      // Payment verified — only now record the credential's signature and
+      // payer. Recording an unverified header's claimed signature would let a
+      // bogus voucher overwrite the provider's only copy of the latest signed
+      // commitment.
+      state.extractPayer(c as unknown as AuthContext)
       state.armAbortGuard(c as unknown as SignalContext)
 
       // mpp-session-ws: the verified request is a WebSocket handshake, so hand

@@ -5,7 +5,7 @@ import { Mppx, Request as MppxRequest } from 'mppx/server'
 import { Store as MppxStore } from 'mppx'
 import type { RouteDockManifest } from '../types.js'
 import { resolveVaultSettlementAddresses } from './internal/vaultSettlement.js'
-import { extractPayerAddress } from './payer.js'
+import { parsePaymentCredential } from './payment-credential.js'
 import { channelAuthorizer, withTypedChannelErrors } from './mppCompatibility.js'
 import type { Method } from 'mppx'
 
@@ -292,31 +292,6 @@ export function createMppSessionHandler(opts: MppSessionHandlerOptions): Request
         return
       }
 
-      // Extract the signature (and payer address) from the authorization header before passing to mppx
-      const authHeader = req.headers['authorization']
-      if (typeof authHeader === 'string' && authHeader.startsWith('Payment ')) {
-        try {
-          const credB64 = authHeader.replace(/^Payment\s+/, '').split(',').find(p => p.trim().startsWith('credential='))
-          if (credB64) {
-            const credJson = Buffer.from(credB64.split('=').slice(1).join('=').replace(/^"|"$/g, ''), 'base64').toString('utf8')
-            const cred = JSON.parse(credJson) as {
-              sender?: string
-              payload?: { signature?: string; sender?: string; from?: string }
-            }
-            if (cred.payload?.signature) {
-              lastSignatureHex = cred.payload.signature
-            }
-            // Capture payer address on first voucher (before sessionOpened is set)
-            if (!sessionPayerAddress) {
-              const key = cred.sender ?? cred.payload?.sender ?? cred.payload?.from
-              sessionPayerAddress = extractPayerAddress(key)
-            }
-          }
-        } catch {
-          // non-fatal — signature/payer extraction is best-effort
-        }
-      }
-
       const fetchReq = MppxRequest.fromNodeListener(req, res)
 
       const result = await (mppx as unknown as {
@@ -340,7 +315,22 @@ export function createMppSessionHandler(opts: MppSessionHandlerOptions): Request
         return
       }
 
-      // Payment verified. Detect connection teardown so a client crash mid-
+      // Payment verified — only now record the credential's signature and
+      // payer. Recording an unverified header's claimed signature would let a
+      // bogus voucher overwrite the provider's only copy of the latest signed
+      // commitment.
+      const authHeader = req.headers['authorization']
+      const verifiedCred = parsePaymentCredential(
+        typeof authHeader === 'string' ? authHeader : undefined,
+      )
+      if (verifiedCred?.signature) {
+        lastSignatureHex = verifiedCred.signature
+      }
+      if (!sessionPayerAddress && verifiedCred?.payer) {
+        sessionPayerAddress = verifiedCred.payer
+      }
+
+      // Detect connection teardown so a client crash mid-
       // session flags the channel for the reconciler instead of leaking
       // in-memory state and leaving the Supabase row stuck `open`.
       if (!closeListenerArmed) {

@@ -22,6 +22,18 @@ export function base64ToUtf8(b64: string): string {
 }
 
 /**
+ * Decode a base64url string (RFC 4648 §5 — `-`/`_` alphabet, optional
+ * padding) to UTF-8 text. mppx 0.5.x serializes Payment credentials with
+ * `Base64.fromString(json, { pad: false, url: true })`; plain `atob` throws
+ * `InvalidCharacterError` on `-` and `_`, so the input is normalized first.
+ */
+export function base64UrlToUtf8(b64: string): string {
+  const std = b64.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = std + '='.repeat((4 - (std.length % 4)) % 4)
+  return base64ToUtf8(padded)
+}
+
+/**
  * Decode a hex string to a `Uint8Array`. Accepts an optional `0x` prefix.
  * Mirrors `Buffer.from(hex, 'hex')` but returns a plain `Uint8Array` (which
  * `Buffer` already extends, so existing consumers are unaffected).
