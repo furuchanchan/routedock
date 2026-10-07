@@ -204,7 +204,10 @@ export interface ModeSelectOptions {
   transport?: 'sse' | 'websocket'
   /** Prefer the lowest-cost supported per-request mode when set to 'cost'. */
   optimize?: 'cost'
-  /** Optional maximum acceptable per-request amount for cost-based selection. */
+  /** Optional maximum acceptable per-request amount. Applies to cost-based
+   * selection and to the default per-request fallback; a manifest whose
+   * per-request prices all exceed it is rejected with
+   * RouteDockPolicyRejectError('budget_per_request_exceeded'). */
   budget_per_request?: string
   /**
    * Override mode selection and use this specific mode.
@@ -297,6 +300,11 @@ interface ModeSelection {
   reason?: 'cost-optimized'
 }
 
+function perRequestAmount(manifest: RouteDockManifest, mode: 'x402' | 'mpp-charge'): number {
+  const amount = manifest.pricing[mode]?.amount
+  return typeof amount === 'string' ? Number.parseFloat(amount) : Number.NaN
+}
+
 function selectFromModes(
   modes: PaymentMode[],
   manifest: RouteDockManifest,
@@ -317,15 +325,10 @@ function selectFromModes(
   if (options.optimize === 'cost') {
     const candidates = (['x402', 'mpp-charge'] as Array<'x402' | 'mpp-charge'>)
       .filter((mode) => modes.includes(mode))
-      .map((mode) => {
-        const pricing = manifest.pricing[mode]
-        const amount = pricing?.amount
-        const parsedAmount = typeof amount === 'string' ? Number.parseFloat(amount) : Number.NaN
-        return {
-          mode: mode as PaymentMode,
-          amount: Number.isFinite(parsedAmount) ? parsedAmount : Number.POSITIVE_INFINITY,
-        }
-      })
+      .map((mode) => ({
+        mode: mode as PaymentMode,
+        amount: perRequestAmount(manifest, mode),
+      }))
       .filter((candidate) => Number.isFinite(candidate.amount))
 
     if (candidates.length > 0) {
@@ -347,6 +350,25 @@ function selectFromModes(
         throw new RouteDockPolicyRejectError('budget_per_request_exceeded')
       }
     }
+  }
+
+  const defaultOrder = (['mpp-charge', 'x402'] as Array<'mpp-charge' | 'x402'>)
+    .filter((mode) => modes.includes(mode))
+  const budget = options.budget_per_request !== undefined
+    ? Number.parseFloat(options.budget_per_request)
+    : Number.NaN
+  if (defaultOrder.length > 0 && Number.isFinite(budget)) {
+    const affordable = defaultOrder.filter((mode) => {
+      const amount = perRequestAmount(manifest, mode)
+      return Number.isFinite(amount) && amount <= budget
+    })
+    // Per-request modes are advertised but none fit the caller's ceiling —
+    // error like the cost branch instead of paying over budget.
+    const winner = affordable[0]
+    if (winner === undefined) {
+      throw new RouteDockPolicyRejectError('budget_per_request_exceeded')
+    }
+    return { mode: winner }
   }
 
   if (modes.includes('mpp-charge')) return { mode: 'mpp-charge' }
