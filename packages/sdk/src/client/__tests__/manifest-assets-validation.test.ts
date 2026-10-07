@@ -16,7 +16,7 @@ const validBaseManifest: RouteDockManifest = {
   network: 'testnet',
   asset: 'USDC',
   asset_contract: 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA',
-  payee: 'GDTESTPAYEEADDRESS0000000000000000000000000000000000000000',
+  payee: 'GZUAUZKY2Z4K2DPI4OPQVH545KMUQ7TQ7IJHDYM7WHI65EMCHSRZ6ILF',
   pricing: {
     x402: { amount: '0.001', per: 'request' },
     'mpp-charge': { amount: '0.0008', per: 'request' },

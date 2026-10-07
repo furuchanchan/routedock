@@ -108,9 +108,16 @@ export function assertEndpointActive(
  * - All keys in `latency_hints` must be a subset of declared `regions`.
  * - If `assets` is defined, it must be a non-empty array whose first entry
  *   (`assets[0]`) matches the root-level `asset` and `asset_contract`.
+ * - Every mode listed in `modes` has a `pricing` entry (missing entries used
+ *   to surface as a raw TypeError in `pay()`/`estimateCost()`).
+ * - Every entry in `deprecated_modes` is also listed in `modes`.
+ * - `pricing` amounts/rates/deposits parse as USDC decimal strings — a
+ *   malformed value is rethrown as RouteDockManifestError instead of the
+ *   RangeError `usdcToStroops` raises later inside the pay path.
  */
 export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: string): void {
   const context = baseUrl ? ` at ${baseUrl}` : ''
+  assertManifestPricingConsistency(manifest, context)
   if (manifest.latency_hints !== undefined) {
     if (!Array.isArray(manifest.regions) || manifest.regions.length === 0) {
       throw new RouteDockManifestError(
@@ -145,6 +152,47 @@ export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: strin
     if (first.asset !== manifest.asset || first.asset_contract !== manifest.asset_contract) {
       throw new RouteDockManifestError(
         `Invalid manifest${context}: assets[0] (${first.asset}:${first.asset_contract}) must match root asset fields (${manifest.asset}:${manifest.asset_contract})`,
+      )
+    }
+  }
+}
+
+function assertManifestPricingConsistency(manifest: RouteDockManifest, context: string): void {
+  for (const mode of manifest.modes) {
+    if (manifest.pricing[mode] === undefined) {
+      throw new RouteDockManifestError(
+        `Invalid manifest${context}: mode '${mode}' is listed in modes but pricing.${mode} is missing`,
+      )
+    }
+  }
+
+  if (manifest.deprecated_modes !== undefined) {
+    const modeSet = new Set(manifest.modes)
+    for (const deprecated of manifest.deprecated_modes) {
+      if (!modeSet.has(deprecated)) {
+        throw new RouteDockManifestError(
+          `Invalid manifest${context}: deprecated_modes entry '${deprecated}' is not listed in modes`,
+        )
+      }
+    }
+  }
+
+  const numericFields: Array<[PaymentMode, string, string | undefined]> = []
+  for (const mode of ['x402', 'mpp-charge'] as const) {
+    numericFields.push([mode, 'amount', manifest.pricing[mode]?.amount])
+  }
+  for (const mode of ['mpp-session', 'mpp-session-ws'] as const) {
+    numericFields.push([mode, 'rate', manifest.pricing[mode]?.rate])
+    numericFields.push([mode, 'min_deposit', manifest.pricing[mode]?.min_deposit])
+  }
+  for (const [mode, field, value] of numericFields) {
+    if (value === undefined) continue
+    try {
+      usdcToStroops(value)
+    } catch (err) {
+      throw new RouteDockManifestError(
+        `Invalid manifest${context}: pricing.${mode}.${field} is not a valid USDC decimal: ${JSON.stringify(value)}`,
+        { cause: err },
       )
     }
   }

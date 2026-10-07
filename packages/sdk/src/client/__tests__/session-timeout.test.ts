@@ -34,13 +34,13 @@ function manifest(): RouteDockManifest {
     modes: ['mpp-session'],
     network: 'testnet',
     asset: 'USDC',
-    asset_contract: 'CTEST_ASSET',
+    asset_contract: 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA',
     payee: 'GTEST_PAYEE',
     pricing: {
       'mpp-session': {
         rate: '0.0001',
         per: 'voucher',
-        channel_factory: 'CTEST_CHANNEL_CONTRACT',
+        channel_factory: 'CCK4XOW3YKQUEZFONUTINKMSNW7SNMRQZURME5U3UP7E6WNGK7UHUCAH',
         min_deposit: '0.10',
         refund_waiting_period_ledgers: 17_280,
       },
