@@ -465,7 +465,7 @@ export function mppSessionWsVerified(c: { get: (key: string) => unknown }): bool
 /** Contexts the shared session state is invoked with (subset of hono's Context). */
 interface DeleteContext {
   req: { json(): Promise<unknown> }
-  json: (data: unknown) => Response
+  json: (data: unknown, status?: number) => Response
 }
 interface SignalContext {
   req: { raw: { signal?: AbortSignal } }
@@ -675,6 +675,11 @@ function createMppSessionHandlerState(
         // empty or non-JSON body
       }
 
+      // Decimal/negative/scientific amounts would throw SyntaxError out of
+      // BigInt and surface as an unstructured 500 — reject them as 400.
+      if (body?.amount !== undefined && !/^\d+$/.test(body.amount)) {
+        return c.json({ error: 'invalid amount: expected a non-negative integer string' }, 400)
+      }
       const bodyAmount = body?.amount ? BigInt(body.amount) : 0n
       const recordAmount = record?.amount ?? 0n
       let closeAmount: bigint
@@ -757,10 +762,6 @@ function createMppSessionHonoHandler(
   const sessionPricing = opts.pricing[config.mode]!
   return async (c, next) => {
     try {
-      if (c.req.method === 'DELETE') {
-        return state.handleDelete(c as unknown as DeleteContext)
-      }
-
       const result = await (
         state.mppx as unknown as {
           channel: (o: { amount: string; description?: string }) => (
@@ -781,6 +782,13 @@ function createMppSessionHonoHandler(
         const headers: Record<string, string> = {}
         challenge.headers.forEach((v: string, k: string) => { headers[k] = v })
         return new Response(await challenge.text(), { status: 402, headers })
+      }
+
+      // Only verified requests may close the channel: the credential above
+      // proves the caller holds this channel's commitment — an unauthenticated
+      // DELETE used to force-close any live session for free.
+      if (c.req.method === 'DELETE') {
+        return state.handleDelete(c as unknown as DeleteContext)
       }
 
       state.armAbortGuard(c as unknown as SignalContext)

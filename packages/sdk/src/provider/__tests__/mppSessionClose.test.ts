@@ -1,9 +1,58 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { mock } from 'node:test'
+
+const VERIFIED_TOKEN = 'verified-credential-token'
+mock.module('@stellar/mpp/channel/server', {
+  namedExports: {
+    Store: {
+      memory: () => {
+        const m = new Map<string, unknown>()
+        return {
+          async get(k: string) { return m.get(k) },
+          async put(k: string, v: unknown) { m.set(k, v) },
+          async delete(k: string) { m.delete(k) },
+          update(k: string, fn: (v: unknown) => unknown) { m.set(k, fn(m.get(k))) },
+        }
+      },
+    },
+    close: async () => 'CLOSE_TX_HASH',
+    stellar: () => [],
+  },
+})
+mock.module('mppx/server', {
+  namedExports: {
+    Expires: {},
+    Store: {},
+    Request: {},
+    Response: {},
+    Transport: {},
+    NodeListener: {},
+    stripe: {},
+    tempo: {},
+    Mppx: {
+      create: () => ({
+        channel: (_o: { amount: string }) => async (request: Request) => {
+          const auth = request.headers.get('authorization')
+          if (auth === `Payment ${VERIFIED_TOKEN}`) {
+            return { status: 200 }
+          }
+          return {
+            status: 402,
+            challenge: new Response('payment required', {
+              status: 402,
+              headers: { 'www-authenticate': 'Payment id="test", realm="test", method="stellar", intent="channel", request="e30"' },
+            }),
+          }
+        },
+      }),
+    },
+  },
+})
 import { Hono } from 'hono'
 import { Keypair } from '@stellar/stellar-sdk'
-import { routedockHono } from '../hono.js'
 import type { RouteDockManifest } from '../../types.js'
+
+const { routedockHono } = await import('../hono.js')
 
 const payeeKeypair = Keypair.random()
 const commitKeypair = Keypair.random()
@@ -62,7 +111,7 @@ test('MPP Session DELETE close prefers tracked higher voucher over lower body am
   // But if body.amount is smaller than server's tracked lastCumulativeAmount, it shouldn't close for less.
   const req = new Request('http://localhost/stream', {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', authorization: `Payment ${VERIFIED_TOKEN}` },
     body: JSON.stringify({ amount: '0', signature: 'abcd' }),
   })
 

@@ -201,7 +201,10 @@ describe('routedockHono — mpp-session-ws', () => {
 
     const res = await app.request('/stream/orderbook', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Payment eyJwYXlsb2FkIjp7ImFjdGlvbiI6InZvdWNoZXIifX0',
+      },
       body: JSON.stringify({ amount: '1000', signature: 'ab'.repeat(64) }),
     })
     assert.equal(res.status, 200)

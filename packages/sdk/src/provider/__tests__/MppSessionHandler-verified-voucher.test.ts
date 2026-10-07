@@ -59,6 +59,37 @@ mock.module('../mppCompatibility.js', {
   },
 })
 
+const VERIFIED_TOKEN = 'verified-credential-token'
+mock.module('mppx/server', {
+  namedExports: {
+    Expires: {},
+    Store: {},
+    Request: { fromNodeListener: () => new Request('http://localhost/') },
+    Response: {},
+    Transport: {},
+    NodeListener: {},
+    stripe: {},
+    tempo: {},
+    Mppx: {
+      create: () => ({
+        channel: (_o: { amount: string }) => async (request: globalThis.Request) => {
+          const auth = request.headers.get('authorization')
+          if (auth === `Payment ${VERIFIED_TOKEN}`) {
+            return { status: 200 }
+          }
+          return {
+            status: 402,
+            challenge: new Response('payment required', {
+              status: 402,
+              headers: { 'www-authenticate': 'Payment id="test", realm="test", method="stellar", intent="channel", request="e30"' },
+            }),
+          }
+        },
+      }),
+    },
+  },
+})
+
 const { routedock } = await import('../routedockMiddleware.js')
 
 const manifest: RouteDockManifest = {
@@ -205,7 +236,7 @@ describe('routedock (Express) — voucher state only from verified credentials',
 
       const res = await fetch(`${url}/price`, {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', authorization: `Payment ${VERIFIED_TOKEN}` },
         body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(32) }),
       })
       assert.equal(res.status, 200)

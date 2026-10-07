@@ -259,7 +259,7 @@ describe('routedock (Express) — real HTTP regression coverage for verified-onl
 
       const deleteRes = await fetch(`${url}/price`, {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', authorization: goodHeader },
         body: JSON.stringify({ amount: '5000', signature: 'ab'.repeat(64) }),
       })
       assert.equal(deleteRes.status, 200)

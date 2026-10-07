@@ -265,9 +265,50 @@ export function createMppSessionHandler(opts: MppSessionHandlerOptions): Request
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      // DELETE (channel close) goes through the same voucher verification as
+      // data requests — previously it ran before any credential check, so a
+      // bare DELETE could force-close any live channel for free. Only the
+      // Authorization header matters for verification, and the Express body
+      // parser may have consumed the stream, so a synthetic Request is used.
+      const fetchReq = req.method === 'DELETE'
+        ? new Request('http://localhost' + (req.url ?? '/'), {
+            method: 'DELETE',
+            headers: req.headers.authorization
+              ? { authorization: req.headers.authorization }
+              : {},
+          })
+        : MppxRequest.fromNodeListener(req, res)
+
+      const result = await (mppx as unknown as {
+        channel: (o: { amount: string; description?: string }) =>
+          (r: globalThis.Request) => Promise<{
+            status: number
+            challenge?: globalThis.Response
+            withReceipt?: (r: globalThis.Response) => globalThis.Response
+          }>
+      }).channel({
+        amount: rateHuman,
+        description: opts.manifest.name,
+      })(fetchReq)
+
+      if (result.status === 402) {
+        const challenge = result.challenge!
+        res.status(402)
+        challenge.headers.forEach((v: string, k: string) => res.setHeader(k, v))
+        const body = await challenge.text()
+        res.send(body)
+        return
+      }
+
       if (req.method === 'DELETE') {
         await loadPersistedRecord()
         const body = req.body as { amount?: string; signature?: string } | undefined
+        // Decimal/negative/scientific amounts would throw SyntaxError out of
+        // BigInt and surface as an unstructured 500 — reject them as 400.
+        if (body?.amount !== undefined && !/^\d+$/.test(body.amount)) {
+          res.status(400).json({ error: 'invalid amount: expected a non-negative integer string' })
+          return
+        }
         const bodyAmount = body?.amount ? BigInt(body.amount) : 0n
         const recordAmount = record?.amount ?? 0n
         let closeAmount: bigint
@@ -355,29 +396,6 @@ export function createMppSessionHandler(opts: MppSessionHandlerOptions): Request
         await innerStore.delete(voucherRecordKey)
         closeListenerArmed = false
         clearIdleTimer()
-        return
-      }
-
-      const fetchReq = MppxRequest.fromNodeListener(req, res)
-
-      const result = await (mppx as unknown as {
-        channel: (o: { amount: string; description?: string }) =>
-          (r: globalThis.Request) => Promise<{
-            status: number
-            challenge?: globalThis.Response
-            withReceipt?: (r: globalThis.Response) => globalThis.Response
-          }>
-      }).channel({
-        amount: rateHuman,
-        description: opts.manifest.name,
-      })(fetchReq)
-
-      if (result.status === 402) {
-        const challenge = result.challenge!
-        res.status(402)
-        challenge.headers.forEach((v: string, k: string) => res.setHeader(k, v))
-        const body = await challenge.text()
-        res.send(body)
         return
       }
 

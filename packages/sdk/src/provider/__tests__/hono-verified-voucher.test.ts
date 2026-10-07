@@ -70,6 +70,37 @@ mock.module('../mppCompatibility.js', {
   },
 })
 
+const VERIFIED_TOKEN = 'verified-credential-token'
+mock.module('mppx/server', {
+  namedExports: {
+    Expires: {},
+    Store: {},
+    Request: {},
+    Response: {},
+    Transport: {},
+    NodeListener: {},
+    stripe: {},
+    tempo: {},
+    Mppx: {
+      create: () => ({
+        channel: (_o: { amount: string }) => async (request: globalThis.Request) => {
+          const auth = request.headers.get('authorization')
+          if (auth === `Payment ${VERIFIED_TOKEN}`) {
+            return { status: 200 }
+          }
+          return {
+            status: 402,
+            challenge: new Response('payment required', {
+              status: 402,
+              headers: { 'www-authenticate': 'Payment id="test", realm="test", method="stellar", intent="channel", request="e30"' },
+            }),
+          }
+        },
+      }),
+    },
+  },
+})
+
 const { routedockHono } = await import('../hono.js')
 
 const manifest: RouteDockManifest = {
@@ -163,7 +194,7 @@ describe('routedockHono — voucher state only from verified credentials', () =>
 
     const res = await app.request('/price', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: `Payment ${VERIFIED_TOKEN}` },
       body: JSON.stringify({ amount: '2000', signature: 'bb'.repeat(32) }),
     })
     assert.equal(res.status, 200)
@@ -245,7 +276,7 @@ describe('routedockHono — voucher state only from verified credentials', () =>
 
     const res = await app.request('/price', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: `Payment ${VERIFIED_TOKEN}` },
       body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(32) }),
     })
     assert.equal(res.status, 200)
@@ -261,7 +292,7 @@ describe('routedockHono — voucher state only from verified credentials', () =>
     // client-supplied body with an amount of 0 must not trigger a close.
     const res = await app.request('/price', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: `Payment ${VERIFIED_TOKEN}` },
       body: JSON.stringify({}),
     })
     assert.equal(res.status, 200)

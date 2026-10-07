@@ -272,7 +272,7 @@ describe('routedockHono — real HTTP regression coverage for verified-only vouc
     // crafted signature the failed request tried to introduce.
     const deleteRes = await app.request('/price', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: goodHeader },
       body: JSON.stringify({ amount: '5000', signature: 'ab'.repeat(64) }),
     })
     assert.equal(deleteRes.status, 200)
@@ -332,7 +332,7 @@ describe('routedockHono — real HTTP regression coverage for verified-only vouc
     const appB = buildApp({ sessionStore: sharedStore })
     const deleteRes = await appB.request('/price', {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: voucherHeader },
       body: JSON.stringify({ amount: '5000', signature: 'ff'.repeat(64) }),
     })
     assert.equal(deleteRes.status, 200)
