@@ -1,23 +1,25 @@
-# @routedock/sdk
+# @routedock/routedock
 
 Unified payment execution layer for autonomous agents on Stellar. One SDK for x402, MPP charge, and MPP session — mode selected automatically from the provider's `routedock.json` manifest.
 
 ## Install
 
 ```bash
-npm install @routedock/sdk
+npm install @routedock/routedock
 ```
 
 ## Agent Usage
 
 ```ts
-import { RouteDockClient } from '@routedock/sdk/client'
+import { RouteDockClient } from '@routedock/routedock/client'
 import { Keypair } from '@stellar/stellar-sdk'
 
 const client = new RouteDockClient({
   wallet: Keypair.fromSecret(process.env.AGENT_SECRET),
   network: 'testnet',
   spendCap: { daily: '1.00', asset: 'USDC' },
+  // required for openSession() — the session commitment secret
+  commitmentSecret: process.env.COMMITMENT_SECRET,
 })
 
 // Single call — SDK reads manifest, picks mode automatically
@@ -26,11 +28,12 @@ const result = await client.pay('https://provider.example.com/price')
 // result.txHash — settlement hash (or null for session vouchers)
 // result.mode   — 'x402' | 'mpp-charge' | 'mpp-session'
 
-// Sustained streaming access
+// Sustained streaming access — openSession() requires commitmentSecret above
 const session = await client.openSession('https://provider.example.com/stream/orderbook')
+let updates = 0
 for await (const update of session.stream()) {
   console.log(update)
-  if (done) break
+  if (++updates >= 100) break
 }
 await session.close() // triggers on-chain settlement
 ```
@@ -44,7 +47,7 @@ production, inject a persistent implementation so a crash or restart can't reset
 the accumulator and bypass the cap:
 
 ```ts
-import { RouteDockClient, type SpendStore, type DailySpend } from '@routedock/sdk/client'
+import { RouteDockClient, type SpendStore, type DailySpend } from '@routedock/routedock/client'
 
 const redisSpendStore: SpendStore = {
   async read(): Promise<DailySpend | null> {
@@ -68,7 +71,7 @@ const client = new RouteDockClient({
 
 ```ts
 import express from 'express'
-import { routedock } from '@routedock/sdk/provider'
+import { routedock } from '@routedock/routedock/provider'
 
 const app = express()
 
@@ -94,7 +97,7 @@ For `mpp-session` mode, the middleware exposes three hooks that fire at each sta
 ```ts
 app.use('/stream', routedock({
   modes: ['mpp-session'],
-  pricing: { 'mpp-session': { rate: '0.0001', channelContract: CHANNEL_CONTRACT } },
+  pricing: { 'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_FACTORY } },
   asset: 'USDC',
   assetContract: USDC_ASSET_CONTRACT,
   payee: PAYEE_ADDRESS,
@@ -103,38 +106,44 @@ app.use('/stream', routedock({
   manifest,
   commitmentPublicKey: COMMITMENT_PUBLIC_KEY,
 
-  // Fires once when the first voucher is verified for a new session
-  onSessionOpen: async (channelId) => {
+  // Fires once when the first voucher is verified for a new session.
+  // channelId is the configured channelFactory contract id.
+  onSessionOpen: async (channelId, payer) => {
     await db.from('sessions').insert({
       channel_id: channelId,
+      payer,
       status: 'open',
       voucher_count: 0,
     })
   },
 
   // Fires after each verified ed25519 commitment (off-chain, no tx fee)
-  onVoucher: async (voucherIndex, cumulativeAmount) => {
+  onVoucher: async (channelId, voucherIndex, cumulativeAmount, signature) => {
     await db.from('sessions').update({
       voucher_count: voucherIndex,
-      cumulative_amount: parseFloat(cumulativeAmount),
+      cumulative_amount: cumulativeAmount, // USDC decimal string — keep it a string
+      latest_signature: signature,
     }).eq('channel_id', channelId)
   },
 
-  // Fires after the on-chain channel close settles the cumulative amount
-  onSettled: async (txHash, totalPaid, mode) => {
+  // Fires after the on-chain channel close settles the cumulative amount.
+  // This hook gets no channel id — filter on CHANNEL_FACTORY, the same value
+  // the handler passes as channelId to the other hooks.
+  onSettled: async (txHash, totalPaid, mode, payer) => {
     await db.from('sessions').update({
       status: 'closed',
       settlement_tx_hash: txHash,
-    }).eq('channel_id', channelId)
+      total_paid: totalPaid,
+    }).eq('channel_id', CHANNEL_FACTORY)
   },
 }))
 ```
 
 | Hook | When it fires | On-chain? |
 |---|---|---|
-| `onSessionOpen(channelId)` | First verified voucher in a new session | No |
-| `onVoucher(index, cumulativeAmount)` | Each verified ed25519 commitment | No |
-| `onSettled(txHash, amount, mode)` | Channel close transaction confirmed | Yes |
+| `onSessionOpen(channelId, payer)` | First verified voucher in a new session | No |
+| `onVoucher(channelId, voucherIndex, cumulativeAmount, signature)` | Each verified ed25519 commitment | No |
+| `onSettled(txHash, amount, mode, payer)` | Channel close transaction confirmed | Yes |
 
 ## Running a provider in production
 
@@ -451,10 +460,10 @@ don't run on Workers.
 >
 > For production or mainnet, keep RouteDockClient on the server (a route handler or server action) and read the key from a non-public variable such as `AGENT_SECRET`, as the Agent Usage section does.
 
-`@routedock/sdk/react` provides hooks for client construction, payments, sessions, and live tx log subscription. Wrap your app with `RouteDockProvider`:
+`@routedock/routedock/react` provides hooks for client construction, payments, sessions, and live tx log subscription. Wrap your app with `RouteDockProvider`:
 
 ```tsx
-import { RouteDockProvider, useRouteDockClient } from '@routedock/sdk/react'
+import { RouteDockProvider, useRouteDockClient } from '@routedock/routedock/react'
 import { createClient } from '@supabase/supabase-js'
 
 // Dedicated throwaway testnet key. Never a funded or mainnet key.
@@ -482,7 +491,7 @@ function App({ children }: { children: React.ReactNode }) {
 
 ```ts
 // app/api/price/route.ts (runs on the server only)
-import { RouteDockClient } from '@routedock/sdk/client'
+import { RouteDockClient } from '@routedock/routedock/client'
 
 const client = new RouteDockClient({
   wallet: process.env.AGENT_SECRET!,
@@ -499,7 +508,7 @@ export async function POST() {
 ### `usePay(url, options?)`
 
 ```tsx
-import { usePay } from '@routedock/sdk/react'
+import { usePay } from '@routedock/routedock/react'
 
 function PriceButton() {
   const { pay, result, loading, error } = usePay('https://provider.example.com/price')
@@ -516,7 +525,7 @@ function PriceButton() {
 
 ```tsx
 import { useEffect } from 'react'
-import { useSession } from '@routedock/sdk/react'
+import { useSession } from '@routedock/routedock/react'
 
 function StreamingFeed() {
   const { open, close, status, vouchers, cumulative } = useSession(
@@ -537,7 +546,7 @@ The hook automatically fires `session.close()` in the background on unmount when
 ### `useTxLog(filter?)`
 
 ```tsx
-import { useTxLog } from '@routedock/sdk/react'
+import { useTxLog } from '@routedock/routedock/react'
 
 function ActivityFeed({ channelId }: { channelId: string }) {
   const txLog = useTxLog({ channelId, limit: 25 })
@@ -573,7 +582,7 @@ import {
   RouteDockFacilitatorError,
   RouteDockManifestError,
   RouteDockPolicyRejectError,
-} from '@routedock/sdk/client'
+} from '@routedock/routedock/client'
 
 const client = new RouteDockClient({
   wallet: process.env.AGENT_SECRET!,
@@ -614,12 +623,51 @@ try {
 
 The `ModeRouter` uses this decision tree (deterministic, no randomness):
 
-1. If `{ sustained: true }` passed AND manifest supports `mpp-session` → session
-2. Else if manifest supports `mpp-charge` AND network is Stellar → MPP charge (lower fees)
-3. Else if manifest supports `x402` → x402 with facilitator
-4. Else throw `RouteDockNoSupportedModeError`
+1. `{ session: true }` or `{ sustained: true }` selects a session mode when advertised. `{ transport: 'websocket' }` prefers `mpp-session-ws`; the default `sse` transport prefers `mpp-session`. Either preference falls back to the other session variant when only one is advertised.
+2. `{ optimize: 'cost' }` picks the lowest-priced advertised per-request mode (`x402` or `mpp-charge`). With `budget_per_request`, candidates over the ceiling are dropped; if every advertised per-request mode exceeds it, `RouteDockPolicyRejectError('budget_per_request_exceeded')` is thrown. A malformed budget throws `RouteDockPolicyRejectError('invalid_budget_per_request')`.
+3. Otherwise the default order tries `mpp-charge` (lower fees) then `x402`.
+4. Modes listed in the manifest's `deprecated_modes` are tried only after all active modes, with a warning log when one is used.
+5. Nothing advertised and usable → `RouteDockNoSupportedModeError`.
 
-Override with `{ forceMode: 'x402' }` to bypass auto-selection.
+Override with `{ forceMode: 'x402' }` (or any advertised mode) to bypass auto-selection.
+
+## Trust anchor: `expectedPayee`
+
+A fetched manifest is self-signed — the signature alone proves the manifest is intact, not who served it. `expectedPayee` binds the manifest to an out-of-band trust anchor: the fetched manifest's `payee` must equal it or `RouteDockSignatureError` is thrown before any signature work is trusted. Set it whenever the provider address came from the on-chain registry or a pinned allowlist:
+
+```ts
+const client = new RouteDockClient({
+  wallet: Keypair.fromSecret(process.env.AGENT_SECRET),
+  network: 'testnet',
+  commitmentSecret: process.env.COMMITMENT_SECRET,
+  expectedPayee: 'GPROVIDER...',
+})
+```
+
+## Manifest caching
+
+Manifests are cached per provider URL. The TTL comes from the response's `Cache-Control: max-age` or `Expires` header, defaulting to 60s; `no-store` / `no-cache` disable caching. Force a refetch with `client.invalidateManifest(url)`:
+
+```ts
+client.invalidateManifest('https://provider.example.com/price')
+```
+
+## Estimating and preflighting
+
+`estimateCost(url, options?)` resolves the manifest and mode without paying — useful for showing a price before committing. `preflight(manifest, mode?, endpoint?)` checks that the payer has a trustline for the payment asset and returns manifest metadata (`regions`, `latency_hints`, `capabilities`) for approval gates:
+
+```ts
+const quote = await client.estimateCost('https://provider.example.com/price')
+// quote.amount, quote.mode
+
+const manifest = await fetchManifest('https://provider.example.com')
+const check = await client.preflight(manifest)
+// check.hasTrustline, check.asset, check.modes
+```
+
+## Provider note: manifest signatures
+
+Providers must sign manifests with `signManifest` from this SDK, which sets `signature_version: 2`. Clients reject manifests signed with the legacy version.
 
 ## Dispute Resolution
 

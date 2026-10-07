@@ -93,6 +93,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Guard against the unpublished SDK package name
+        # The SDK publishes as @routedock/routedock; the old name has twice
+        # regressed into docs/examples (404 on npm install). The pattern is
+        # bracketed so this line does not match itself.
+        run: |
+          if git grep -n '@routedock/[s]dk' -- ':!pnpm-lock.yaml' ':!*CHANGELOG.md' ':!.changeset'; then
+            echo "::error::found the old SDK package name. The package is published as @routedock/routedock."
+            exit 1
+          fi
       - name: Run actionlint
         uses: reviewdog/action-actionlint@13465d022aa41c282f730be17574b5ce692d0186 # v1.78.1
         with:

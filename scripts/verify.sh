@@ -34,6 +34,12 @@ pnpm install --frozen-lockfile --prefer-offline >/dev/null 2>&1 \
   || fail "pnpm-lock.yaml is out of date with a package.json. Run 'pnpm install' at the root and commit the lockfile."
 echo "  ok"
 
+step "no references to the unpublished package name"
+if git grep -n '@routedock/[s]dk' -- ':!pnpm-lock.yaml' ':!*CHANGELOG.md' ':!.changeset'; then
+  fail "found the old SDK package name. The package is published as @routedock/routedock."
+fi
+echo "  ok"
+
 step "build sdk packages"
 pnpm --filter @routedock/nulth-sdk build >/dev/null || fail "@routedock/nulth-sdk failed to build"
 pnpm --filter @routedock/routedock build >/dev/null || fail "@routedock/routedock failed to build"
