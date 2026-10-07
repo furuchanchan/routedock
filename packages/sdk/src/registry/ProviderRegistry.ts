@@ -126,6 +126,6 @@ export class ProviderRegistry {
    */
   async fetchProviderManifest(record: ProviderRecord): Promise<RouteDockManifest> {
     const baseUrl = new URL(record.base_url).origin
-    return fetchManifest(baseUrl, undefined, undefined, record.payee)
+    return fetchManifest(baseUrl, undefined, undefined, record.payee, this.network)
   }
 }

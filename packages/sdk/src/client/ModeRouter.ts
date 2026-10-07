@@ -81,6 +81,23 @@ export function assertManifestValid(manifest: RouteDockManifest, baseUrl?: strin
   }
 }
 
+/**
+ * Bind a fetched manifest to the network the caller is configured for. The
+ * client signs and pays on its own network regardless of what the provider
+ * declared, so a mismatched manifest must be rejected before mode selection.
+ */
+export function assertManifestNetwork(
+  manifest: RouteDockManifest,
+  expectedNetwork?: 'testnet' | 'mainnet',
+  baseUrl?: string,
+): void {
+  if (expectedNetwork === undefined || manifest.network === expectedNetwork) return
+  const context = baseUrl ? ` at ${baseUrl}` : ''
+  throw new RouteDockManifestError(
+    `Invalid manifest${context}: declares network '${manifest.network}' but the client is configured for '${expectedNetwork}'`,
+  )
+}
+
 interface CacheEntry {
   manifest: RouteDockManifest
   fetchedAt: number
@@ -230,15 +247,17 @@ export async function fetchManifest(
   retryPolicy?: RetryPolicy,
   manifestTimeoutMs = DEFAULT_MANIFEST_TIMEOUT_MS,
   expectedPayee?: string,
+  expectedNetwork?: 'testnet' | 'mainnet',
 ): Promise<RouteDockManifest> {
   const cached = manifestCache.get(baseUrl)
   if (cached && Date.now() < cached.expiresAt) {
     // Re-assert the trust anchor even on cache hits: the manifest content is
-    // immutable, but `expectedPayee` is per-caller, so a caller with a
-    // different anchor must still have the binding enforced.
+    // immutable, but `expectedPayee` and `expectedNetwork` are per-caller, so
+    // a caller with a different anchor must still have the binding enforced.
     verifyManifestSignature(cached.manifest, expectedPayee)
     assertClientVersionSupported(cached.manifest, baseUrl)
     assertManifestValid(cached.manifest, baseUrl)
+    assertManifestNetwork(cached.manifest, expectedNetwork, baseUrl)
     assertManifestActive(cached.manifest, baseUrl)
     return cached.manifest
   }
@@ -284,6 +303,7 @@ export async function fetchManifest(
 
     const manifest = raw as unknown as RouteDockManifest
     assertManifestValid(manifest, baseUrl)
+    assertManifestNetwork(manifest, expectedNetwork, baseUrl)
     verifyManifestSignature(manifest, expectedPayee)
     assertClientVersionSupported(manifest, baseUrl)
     assertManifestActive(manifest, baseUrl)
