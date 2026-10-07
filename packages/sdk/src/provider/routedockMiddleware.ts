@@ -4,6 +4,7 @@ import { createMppChargeHandler } from './MppChargeHandler.js'
 import { createMppSessionHandler } from './MppSessionHandler.js'
 import type { RouteDockManifest, PaymentMode } from '../types.js'
 import { signManifest } from '../manifest/sign.js'
+import { assertProviderConfig } from './internal/assertProviderConfig.js'
 import type { SeenTxStore } from './SeenTxStore.js'
 import type { OrphanedSessionInfo } from './MppSessionHandler.js'
 import type { RouteDockLogger } from '../internal/logger.js'
@@ -84,6 +85,7 @@ export interface RouteDockMiddlewareOptions {
 const MPP_MODES: readonly PaymentMode[] = ['mpp-session', 'mpp-charge']
 
 export function routedock(opts: RouteDockMiddlewareOptions): RequestHandler {
+  assertProviderConfig(opts, 'routedock')
   const startTime = Date.now()
   const signedManifest = signManifest(opts.manifest, opts.payeeSecretKey)
 

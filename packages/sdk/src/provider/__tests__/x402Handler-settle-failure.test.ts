@@ -232,7 +232,7 @@ describe('routedock Express x402 — settle returns success: false (local facili
 
 describe('routedock Express x402 — settle returns success: false (OZ facilitator)', () => {
   it('returns 402 and does not serve the resource', async () => {
-    const h = await makeHarness({ network: 'mainnet', facilitatorApiKey: 'test-key' })
+    const h = await makeHarness({ network: 'mainnet', facilitatorApiKey: 'test-key', manifest: { ...manifest, network: 'mainnet' } })
     try {
       const res = await paidRequest(h.url)
 

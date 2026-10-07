@@ -20,7 +20,7 @@ The agent never decides the payment mode. The provider's manifest declares what'
 
 1. **Client + Provider SDK** — The client handles mode selection and payment execution. The provider middleware handles verification and settlement for all three modes via one Express middleware.
 
-2. **`routedock.json` manifest** — Served at `/.well-known/routedock.json` on every provider. Declares supported modes, pricing, asset, network. Validated against a JSON Schema at startup. Indexed with `pg_trgm` trigram search in Supabase so agents can discover providers by capability.
+2. **`routedock.json` manifest** — Served at `/.well-known/routedock.json` on every provider. Declares supported modes, pricing, asset, network. Validated against a JSON Schema at adapter construction, which also fails fast when the adapter's options drift from the signed manifest (mismatched modes, prices, channel factory, or payee). Indexed with `pg_trgm` trigram search in Supabase so agents can discover providers by capability.
 
 3. **Agent vault contract** — A Soroban contract account using the `Crossmint/stellar-smart-account` pattern with three `__check_auth` policies: daily USDC spend cap, endpoint allowlist, and session key expiry. These are **consensus-layer guarantees** — the chain rejects overspend before any transaction is broadcast.
 

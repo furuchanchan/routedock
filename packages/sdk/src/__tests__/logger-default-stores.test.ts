@@ -48,6 +48,14 @@ const manifest: RouteDockManifest = {
   tags: ['test'],
 }
 
+function manifestFor(mode: 'x402' | 'mpp-charge'): RouteDockManifest {
+  return {
+    ...manifest,
+    modes: [mode],
+    pricing: { [mode]: manifest.pricing[mode]! },
+  }
+}
+
 const BASE_OPTS = {
   asset: 'USDC',
   assetContract: ASSET_CONTRACT,
@@ -85,28 +93,28 @@ beforeEach(() => {
 describe('supplied logger reaches the default stores (#286)', () => {
   it('reaches the Hono x402 SeenTxStore', () => {
     onWorkers(() => {
-      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' } })
+      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' }, manifest: manifestFor('x402') })
     })
     assert.ok(warnedWith(SEEN_TX_WARNING), 'Hono x402 warned through console, not the logger')
   })
 
   it('reaches the Hono mpp-charge SeenTxStore', () => {
     onWorkers(() => {
-      routedockHono({ ...BASE_OPTS, modes: ['mpp-charge'], pricing: { 'mpp-charge': '0.001' } })
+      routedockHono({ ...BASE_OPTS, modes: ['mpp-charge'], pricing: { 'mpp-charge': '0.001' }, manifest: manifestFor('mpp-charge') })
     })
     assert.ok(warnedWith(SEEN_TX_WARNING), 'Hono mpp-charge warned through console, not the logger')
   })
 
   it('reaches the Express x402 SeenTxStore', () => {
     onWorkers(() => {
-      routedock({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' } })
+      routedock({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' }, manifest: manifestFor('x402') })
     })
     assert.ok(warnedWith(SEEN_TX_WARNING), 'Express x402 warned through console, not the logger')
   })
 
   it('reaches the Express mpp-charge SeenTxStore', () => {
     onWorkers(() => {
-      routedock({ ...BASE_OPTS, modes: ['mpp-charge'], pricing: { 'mpp-charge': '0.001' } })
+      routedock({ ...BASE_OPTS, modes: ['mpp-charge'], pricing: { 'mpp-charge': '0.001' }, manifest: manifestFor('mpp-charge') })
     })
     assert.ok(warnedWith(SEEN_TX_WARNING), 'Express mpp-charge warned through console, not the logger')
   })

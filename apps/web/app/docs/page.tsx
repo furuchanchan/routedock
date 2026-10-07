@@ -141,7 +141,7 @@ const closeResult = await session.close()
 
             <Section id="provider-middleware" icon={Server} title="Provider Middleware">
               <p>
-                Middleware adapters sign and serve the manifest at <InlineCode>/.well-known/routedock.json</InlineCode>, verify payments across supported modes, and settle on-chain.
+                Middleware adapters sign and serve the manifest at <InlineCode>/.well-known/routedock.json</InlineCode>, verify payments across supported modes, and settle on-chain. At construction each adapter validates the manifest against the JSON Schema and throws a typed <InlineCode>RouteDockManifestError</InlineCode> when the options drift from the manifest — a served mode missing from <InlineCode>manifest.modes</InlineCode> (or vice versa), a price, asset, network, channel factory, or payee that disagrees, or a <InlineCode>payeeSecretKey</InlineCode> that does not belong to the manifest payee — so the 402 challenges a provider issues can never disagree with the signed manifest its clients read.
               </p>
               <p><strong>Express:</strong></p>
               <Code>{`import express from 'express'

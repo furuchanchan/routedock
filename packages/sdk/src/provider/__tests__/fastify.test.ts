@@ -43,6 +43,39 @@ const manifest: RouteDockManifest = {
   tags: ['test'],
 }
 
+/**
+ * Build a manifest consistent with the modes/pricing under test — required
+ * since adapters now throw at construction when options and manifest drift.
+ */
+function manifestFor(
+  modes: RouteDockFastifyOptions['modes'],
+  pricing: RouteDockFastifyOptions['pricing'],
+): RouteDockManifest {
+  const pricingEntries: RouteDockManifest['pricing'] = {}
+  for (const mode of modes) {
+    if (mode === 'x402' || mode === 'mpp-charge') {
+      pricingEntries[mode] = { amount: pricing[mode] ?? '0.001', per: 'request' }
+    } else {
+      const cfg = mode === 'mpp-session' ? pricing[mode] : undefined
+      pricingEntries[mode] = {
+        rate: cfg?.rate ?? '0.0001',
+        per: 'voucher',
+        channel_factory: cfg?.channelFactory ?? CHANNEL_CONTRACT,
+        min_deposit: '0.10',
+        refund_waiting_period_ledgers: 17280,
+      }
+    }
+  }
+  if (Object.keys(pricingEntries).length === 0) {
+    pricingEntries.x402 = { amount: '0.001', per: 'request' }
+  }
+  return {
+    ...manifest,
+    modes: [...modes],
+    pricing: pricingEntries,
+  }
+}
+
 const BASE_OPTS = {
   asset: 'USDC',
   assetContract: ASSET_CONTRACT,
@@ -57,16 +90,19 @@ const BASE_OPTS = {
 async function makeServer(
   overrides: Partial<RouteDockFastifyOptions> = {},
 ): Promise<{ url: string; close: () => Promise<void> }> {
+  const modes = overrides.modes ?? ['x402', 'mpp-charge', 'mpp-session'] as RouteDockFastifyOptions['modes']
+  const pricing = overrides.pricing ?? {
+    x402: '0.001',
+    'mpp-charge': '0.0008',
+    'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
+  }
   const fastify = Fastify()
   await fastify.register(
     routedockFastify({
       ...BASE_OPTS,
-      modes: ['x402', 'mpp-charge', 'mpp-session'],
-      pricing: {
-        x402: '0.001',
-        'mpp-charge': '0.0008',
-        'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
-      },
+      modes,
+      pricing,
+      manifest: manifestFor(modes, pricing),
       ...overrides,
     } as Parameters<typeof routedockFastify>[0]),
   )
@@ -84,7 +120,7 @@ async function makeServer(
 
 describe('routedockFastify — manifest endpoint', () => {
   it('serves a signed /.well-known/routedock.json', async () => {
-    const { url, close } = await makeServer({ modes: [] as ('x402' | 'mpp-charge' | 'mpp-session')[], pricing: {} })
+    const { url, close } = await makeServer()
     try {
       const res = await fetch(`${url}/.well-known/routedock.json`)
       assert.equal(res.status, 200)
@@ -96,16 +132,30 @@ describe('routedockFastify — manifest endpoint', () => {
     }
   })
 
-  it('passes through to route handler when no modes are configured', async () => {
-    const { url, close } = await makeServer({ modes: [], pricing: {} })
-    try {
-      const res = await fetch(`${url}/price`)
-      assert.equal(res.status, 200)
-      const body = await res.json() as { price: string }
-      assert.equal(body.price, '42')
-    } finally {
-      await close()
-    }
+  it('throws at construction when no modes are configured', async () => {
+    // Served modes is empty while the manifest still advertises paid modes.
+    await assert.rejects(
+      makeServer({ modes: [], pricing: {}, manifest }),
+      /routedockFastify: served modes differ from manifest\.modes/,
+    )
+  })
+
+  it('throws at construction when options and manifest prices drift', async () => {
+    await assert.rejects(
+      makeServer({
+        modes: ['mpp-charge'],
+        pricing: { 'mpp-charge': '0.0008' },
+        manifest: manifestFor(['mpp-charge'], { 'mpp-charge': '0.0009' }),
+      }),
+      /routedockFastify: pricing\.mpp-charge/,
+    )
+  })
+
+  it('throws at construction on a schema-invalid manifest', async () => {
+    await assert.rejects(
+      makeServer({ manifest: { ...manifest, routedock: 'banana' } }),
+      /routedockFastify: Invalid manifest/,
+    )
   })
 })
 
@@ -260,6 +310,10 @@ describe('routedockFastify — settlement idempotency', () => {
         ...BASE_OPTS,
         modes: ['x402'],
         pricing: { x402: '0.001' },
+        manifest: overrides.manifest ?? manifestFor(
+          overrides.modes ?? ['x402'],
+          overrides.pricing ?? { x402: '0.001' },
+        ),
         ...overrides,
       } as RouteDockFastifyOptions),
     )
@@ -370,6 +424,7 @@ describe('routedockFastify — settlement idempotency', () => {
           ...BASE_OPTS,
           modes: ['x402'],
           pricing: { x402: '0.001' },
+          manifest: manifestFor(['x402'], { x402: '0.001' }),
           seenTxStore: seenStore,
         }),
       )
@@ -384,6 +439,7 @@ describe('routedockFastify — settlement idempotency', () => {
           ...BASE_OPTS,
           modes: ['x402'],
           pricing: { x402: '5.00' },
+          manifest: manifestFor(['x402'], { x402: '5.00' }),
           seenTxStore: seenStore,
         }),
       )
@@ -422,6 +478,7 @@ describe('routedockFastify — constructor validation', () => {
           commitmentPublicKey: undefined,
           modes: ['mpp-session'],
           pricing: { 'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT } },
+          manifest: manifestFor(['mpp-session'], { 'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT } }),
         } as unknown as Parameters<typeof routedockFastify>[0]),
       /requirescommitmentPublicKey|commitmentPublicKey/i,
     )

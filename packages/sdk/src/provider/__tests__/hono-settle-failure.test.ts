@@ -202,7 +202,7 @@ describe('routedockHono x402 — settle returns success: false (local facilitato
 
 describe('routedockHono x402 — settle returns success: false (OZ facilitator)', () => {
   it('returns 402 and does not serve the resource', async () => {
-    const h = makeHarness({ network: 'mainnet', facilitatorApiKey: 'test-key' })
+    const h = makeHarness({ network: 'mainnet', facilitatorApiKey: 'test-key', manifest: { ...manifest, network: 'mainnet' } })
 
     const res = await paidRequest(h.app)
 

@@ -15,6 +15,7 @@ import { stellar as mppChannel, close as channelClose, Store } from '@stellar/mp
 import { Mppx } from 'mppx/server'
 import type { RouteDockManifest, PaymentMode } from '../types.js'
 import { signManifest } from '../manifest/sign.js'
+import { assertProviderConfig } from './internal/assertProviderConfig.js'
 import { resolvePayee } from '../internal/payee.js'
 import { usdcToUnits } from '../internal/usdc.js'
 import { extractPayerAddress } from './payer.js'
@@ -832,6 +833,7 @@ function isWebSocketUpgradeRequest(c: {
  * ```
  */
 export function routedockHono(opts: RouteDockHonoOptions): MiddlewareHandler {
+  assertProviderConfig(opts, 'routedockHono')
   const handlers: MiddlewareHandler[] = []
   const signedManifest = signManifest(opts.manifest, opts.payeeSecretKey)
 

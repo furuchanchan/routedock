@@ -38,6 +38,48 @@ const manifest: RouteDockManifest = {
   tags: ['test'],
 }
 
+/**
+ * Build a manifest consistent with the modes/pricing under test — required
+ * since adapters now throw at construction when options and manifest drift.
+ */
+function manifestFor(
+  modes: RouteDockHonoOptions['modes'],
+  pricing: RouteDockHonoOptions['pricing'],
+): RouteDockManifest {
+  const pricingEntries: RouteDockManifest['pricing'] = {}
+  for (const mode of modes) {
+    if (mode === 'x402' || mode === 'mpp-charge') {
+      pricingEntries[mode] = { amount: pricing[mode] ?? '0.001', per: 'request' }
+    } else {
+      pricingEntries[mode] = {
+        rate: pricing[mode]?.rate ?? '0.0001',
+        per: 'voucher',
+        channel_factory: pricing[mode]?.channelFactory ?? CHANNEL_CONTRACT,
+        min_deposit: '0.10',
+        refund_waiting_period_ledgers: 17280,
+      }
+    }
+  }
+  // Schema requires at least one pricing entry; keep a dormant one when the
+  // test serves no paid mode.
+  if (Object.keys(pricingEntries).length === 0) {
+    pricingEntries.x402 = { amount: '0.001', per: 'request' }
+  }
+  return {
+    routedock: '1.0',
+    name: manifest.name,
+    description: manifest.description,
+    modes: [...modes],
+    network: 'testnet',
+    asset: 'USDC',
+    asset_contract: ASSET_CONTRACT,
+    payee: payeeKeypair.publicKey(),
+    pricing: pricingEntries,
+    endpoints: { price: { method: 'GET', path: '/price' } },
+    tags: ['test'],
+  }
+}
+
 const BASE_OPTS = {
   asset: 'USDC',
   assetContract: ASSET_CONTRACT,
@@ -49,17 +91,20 @@ const BASE_OPTS = {
 }
 
 function makeApp(overrides: Partial<RouteDockHonoOptions> = {}) {
+  const modes = overrides.modes ?? ['x402', 'mpp-charge', 'mpp-session'] as RouteDockHonoOptions['modes']
+  const pricing = overrides.pricing ?? {
+    x402: '0.001',
+    'mpp-charge': '0.0008',
+    'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
+  }
   const app = new Hono()
   app.use(
     '*',
     routedockHono({
       ...BASE_OPTS,
-      modes: ['x402', 'mpp-charge', 'mpp-session'],
-      pricing: {
-        x402: '0.001',
-        'mpp-charge': '0.0008',
-        'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
-      },
+      modes,
+      pricing,
+      manifest: manifestFor(modes, pricing),
       ...overrides,
     }),
   )
@@ -69,17 +114,37 @@ function makeApp(overrides: Partial<RouteDockHonoOptions> = {}) {
 
 describe('routedockHono — manifest endpoint', () => {
   it('serves /.well-known/routedock.json', async () => {
-    const app = makeApp({ modes: [] as ('x402' | 'mpp-charge' | 'mpp-session')[], pricing: {} })
+    const app = makeApp()
     const res = await app.request('/.well-known/routedock.json')
     assert.equal(res.status, 200)
     const body = await res.json() as { name: string }
     assert.equal(body.name, manifest.name)
   })
 
-  it('passes through when no modes are configured', async () => {
-    const app = makeApp({ modes: [], pricing: {} })
-    const res = await app.request('/price')
-    assert.equal(res.status, 200)
+  it('throws at construction when no modes are configured', () => {
+    // Served modes is empty while the manifest still advertises paid modes.
+    assert.throws(
+      () => makeApp({ modes: [], pricing: {}, manifest }),
+      /routedockHono: served modes differ from manifest\.modes/,
+    )
+  })
+
+  it('throws at construction when options and manifest prices drift', () => {
+    assert.throws(
+      () => makeApp({
+        modes: ['mpp-charge'],
+        pricing: { 'mpp-charge': '0.0008' },
+        manifest: manifestFor(['mpp-charge'], { 'mpp-charge': '0.0009' }),
+      }),
+      /routedockHono: pricing\.mpp-charge/,
+    )
+  })
+
+  it('throws at construction on a schema-invalid manifest', () => {
+    assert.throws(
+      () => makeApp({ manifest: { ...manifest, routedock: 'banana' } }),
+      /routedockHono: Invalid manifest/,
+    )
   })
 })
 
@@ -186,6 +251,9 @@ describe('routedockHono — constructor validation', () => {
           pricing: {
             'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
           },
+          manifest: manifestFor(['mpp-session'], {
+            'mpp-session': { rate: '0.0001', channelFactory: CHANNEL_CONTRACT },
+          }),
         }),
       /commitmentPublicKey/,
     )
@@ -244,6 +312,7 @@ describe('routedockHono — settlement idempotency', () => {
         ...BASE_OPTS,
         modes: ['x402'],
         pricing: { x402: '0.001' },
+        manifest: manifestFor(['x402'], { x402: '0.001' }),
         seenTxStore: seenStore,
       }),
     )
@@ -297,11 +366,11 @@ describe('routedockHono — settlement idempotency', () => {
     const app = new Hono()
     app.use(
       '/cheap',
-      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' }, seenTxStore: seenStore }),
+      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '0.001' }, manifest: manifestFor(['x402'], { x402: '0.001' }), seenTxStore: seenStore }),
     )
     app.use(
       '/expensive',
-      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '5.00' }, seenTxStore: seenStore }),
+      routedockHono({ ...BASE_OPTS, modes: ['x402'], pricing: { x402: '5.00' }, manifest: manifestFor(['x402'], { x402: '5.00' }), seenTxStore: seenStore }),
     )
     app.get('/cheap', (c) => {
       cheapRuns++

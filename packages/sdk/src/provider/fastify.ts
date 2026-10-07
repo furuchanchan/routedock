@@ -5,6 +5,7 @@ import { createX402Handler } from './x402Handler.js'
 import { createMppChargeHandler } from './MppChargeHandler.js'
 import { createMppSessionHandler } from './MppSessionHandler.js'
 import { signManifest } from '../manifest/sign.js'
+import { assertProviderConfig } from './internal/assertProviderConfig.js'
 import type { RouteDockManifest, PaymentMode } from '../types.js'
 import type { SeenTxStore } from './SeenTxStore.js'
 import type { OrphanedSessionInfo } from './MppSessionHandler.js'
@@ -198,6 +199,7 @@ function runExpressHandler(
 const MPP_MODES: readonly PaymentMode[] = ['mpp-session', 'mpp-charge']
 
 export function routedockFastify(opts: RouteDockFastifyOptions): FastifyPluginAsync {
+  assertProviderConfig(opts, 'routedockFastify')
   const signedManifest = signManifest(opts.manifest, opts.payeeSecretKey)
   const handlerMap = new Map<PaymentMode, RequestHandler>()
 
