@@ -34,6 +34,13 @@ Non-secret environment variables (such as `STELLAR_NETWORK` and `PUBLIC_BASE_URL
 
 When `SUPABASE_URL` is configured, apply the database migrations in [supabase/migrations/](../supabase/migrations/) to your Supabase project.
 
+Apply them in filename order. Migration `007_enable_pg_cron_retention.sql` enables
+pg_cron when the instance offers it and schedules the daily
+`settlement-retention-cleanup` job. On hosts where pg_cron cannot be enabled the
+migration prints a named WARNING instead of failing — schedule
+`SELECT cleanup_stale_settlements(7)` daily from an external scheduler there.
+Confirm scheduling with `SELECT jobname, schedule FROM cron.job;`.
+
 ### Scheduled triggers
 
 Provider B registers a `*/15 * * * *` cron trigger in its `wrangler.jsonc`. When deployed, Cloudflare Workers triggers this schedule every 15 minutes to forward periodic settlement reconciliation to the `ChannelSession` Durable Object.
