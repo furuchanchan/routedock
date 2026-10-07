@@ -411,6 +411,9 @@ interface MppSessionHandlerState {
   extractPayer(c: AuthContext): void
   /** Arm the connection-closed orphan guard (idempotent). */
   armAbortGuard(c: SignalContext): void
+  /** Record which session transport served the latest verified request —
+   *  reported to onSettled on close (the shared channel may be served by both). */
+  markTransport(mode: 'mpp-session' | 'mpp-session-ws'): void
 }
 
 function createMppSessionHandlerState(
@@ -428,6 +431,7 @@ function createMppSessionHandlerState(
   let sessionOpened = false
   let lastSignatureHex = ''
   let sessionPayerAddress: string | null = null
+  let lastTransportMode: 'mpp-session' | 'mpp-session-ws' = reportMode
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let settledCleanly = false
   let abortListenerArmed = false
@@ -576,7 +580,11 @@ function createMppSessionHandlerState(
 
         if (opts.onSettled) {
           const totalPaid = (Number(closeAmount) / 1e7).toFixed(7)
-          Promise.resolve().then(() => opts.onSettled!(closeTxHash, totalPaid, reportMode, sessionPayerAddress)).catch(err => {
+          // Snapshot both values eagerly — the deferred callback would
+          // otherwise read them after the reset block below cleared them.
+          const settleMode = lastTransportMode
+          const settlePayer = sessionPayerAddress
+          Promise.resolve().then(() => opts.onSettled!(closeTxHash, totalPaid, settleMode, settlePayer)).catch(err => {
             console.error(`[mpp-session] onSettled callback error:`, err)
             opts.onCallbackError?.(err, 'onSettled')
           })
@@ -586,6 +594,7 @@ function createMppSessionHandlerState(
         voucherCount = 0
         lastCumulativeAmount = 0n
         sessionPayerAddress = null
+        lastTransportMode = reportMode
         abortListenerArmed = false
 
         return c.json({ closeTxHash })
@@ -621,6 +630,10 @@ function createMppSessionHandlerState(
       } catch {
         // non-fatal
       }
+    },
+
+    markTransport(mode: 'mpp-session' | 'mpp-session-ws'): void {
+      lastTransportMode = mode
     },
 
     armAbortGuard(c: SignalContext): void {
@@ -677,6 +690,7 @@ function createMppSessionHonoHandler(
         return new Response(await challenge.text(), { status: 402, headers })
       }
 
+      state.markTransport(config.mode)
       state.armAbortGuard(c as unknown as SignalContext)
 
       // mpp-session-ws: the verified request is a WebSocket handshake, so hand
@@ -743,17 +757,29 @@ export function routedockHono(opts: RouteDockHonoOptions): MiddlewareHandler {
   const sessionModes = (['mpp-session', 'mpp-session-ws'] as const).filter(
     (mode) => opts.modes.includes(mode) && !!opts.pricing[mode],
   )
+  const sessionHandlers: Partial<Record<'mpp-session' | 'mpp-session-ws', MiddlewareHandler>> = {}
   const primarySessionMode = sessionModes[0]
   if (primarySessionMode) {
     if (!opts.commitmentPublicKey) {
       throw new Error('routedockHono: mpp-session/mpp-session-ws mode requires commitmentPublicKey')
     }
+    // Both session transports share one channel store (and one cumulative
+    // key built from the primary channelFactory): advertising different
+    // factories would silently ignore one of them, so reject the config.
+    if (
+      opts.pricing['mpp-session'] && opts.pricing['mpp-session-ws'] &&
+      opts.pricing['mpp-session']!.channelFactory !== opts.pricing['mpp-session-ws']!.channelFactory
+    ) {
+      throw new Error(
+        'routedockHono: mpp-session and mpp-session-ws must use the same channelFactory — session modes share one channel store',
+      )
+    }
     const sessionPricing = opts.pricing[primarySessionMode]!
     const sharedState = createMppSessionHandlerState(opts, sessionPricing, primarySessionMode)
     for (const mode of sessionModes) {
-      handlers.push(
-        createMppSessionHonoHandler({ ...opts, manifest: signedManifest }, { mode }, sharedState),
-      )
+      const handler = createMppSessionHonoHandler({ ...opts, manifest: signedManifest }, { mode }, sharedState)
+      sessionHandlers[mode] = handler
+      handlers.push(handler)
     }
   }
 
@@ -772,8 +798,16 @@ export function routedockHono(opts: RouteDockHonoOptions): MiddlewareHandler {
     )
     const prefersX402 = c.req.header('x-preferred-mode') === 'x402'
 
+    // Session requests route by transport, not by handler position: a
+    // WebSocket upgrade goes to mpp-session-ws, everything else to
+    // mpp-session. A non-session request still falls back to the last
+    // handler as before (e.g. mpp-charge when no session mode is enabled).
+    const sessionHandler = isWebSocketUpgradeRequest(c)
+      ? sessionHandlers['mpp-session-ws'] ?? sessionHandlers['mpp-session']
+      : sessionHandlers['mpp-session'] ?? sessionHandlers['mpp-session-ws']
+
     const handler =
-      hasX402Header || prefersX402 ? handlers[0] : handlers[handlers.length - 1]
+      hasX402Header || prefersX402 ? handlers[0] : sessionHandler ?? handlers[handlers.length - 1]
 
     if (!handler) {
       await next()
