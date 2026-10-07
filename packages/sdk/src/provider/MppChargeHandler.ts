@@ -10,6 +10,7 @@ import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
   checkSettlementReplay,
+  recordSettlementSeen,
   type SeenTxStore,
 } from './SeenTxStore.js'
 import { resolveAssetContract } from '../internal/assetUtils.js'
@@ -185,11 +186,14 @@ export function createMppChargeHandler(opts: MppChargeHandlerOptions): RequestHa
 
       // Record the settlement so a retry of this exact charge is deduped.
       if (idempotencyKey) {
-        await seenTxStore.set(idempotencyKey, {
-          txHash: reference ?? null,
-          headers: receiptHeaders,
-          createdAt: Date.now(),
-        })
+        await recordSettlementSeen(
+          seenTxStore,
+          idempotencyKey,
+          { txHash: reference ?? null, headers: receiptHeaders, createdAt: Date.now() },
+          logger,
+          'mpp-charge',
+          opts.onCallbackError,
+        )
       }
 
       if (reference && opts.onSettled) {

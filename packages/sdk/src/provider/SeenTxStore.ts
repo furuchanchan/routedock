@@ -81,6 +81,34 @@ export interface InMemorySeenTxStoreOptions {
 }
 
 /**
+ * Record a settled payment for dedupe, best-effort.
+ *
+ * The store write only exists so a byte-identical retry can replay the cached
+ * settlement. By the time a handler calls this the funds have already moved
+ * on-chain, so a store failure (e.g. a Supabase blip in
+ * `SupabaseSeenTxStore.set`) must not drop a request that was already paid —
+ * the failure is logged and reported through `onCallbackError`, and the
+ * handler continues to `onSettled` and the route. A byte-identical retry then
+ * misses the cache and settles again, so operators should watch for the
+ * `seenTxStore.set` callback error.
+ */
+export async function recordSettlementSeen(
+  store: SeenTxStore,
+  key: string,
+  record: SettlementRecord,
+  log: RouteDockLogger,
+  mode: string,
+  onCallbackError?: (err: unknown, cb: string) => void,
+): Promise<void> {
+  try {
+    await store.set(key, record)
+  } catch (err) {
+    log('error', `[${mode}] seenTxStore.set failed after settlement; this payment will not dedupe a byte-identical retry`, { error: err })
+    onCallbackError?.(err, 'seenTxStore.set')
+  }
+}
+
+/**
  * How long after a settlement a byte-identical retry may still replay the
  * cached response. Matches the `maxTimeoutSeconds: 60` both x402 requirement
  * objects declare, so past this point the payment is expired anyway.

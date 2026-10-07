@@ -32,6 +32,7 @@ import {
   InMemorySeenTxStore,
   paymentIdempotencyKey,
   checkSettlementReplay,
+  recordSettlementSeen,
   type SeenTxStore,
 } from './SeenTxStore.js'
 import { resolveAssetContract } from '../internal/assetUtils.js'
@@ -266,7 +267,14 @@ function createX402HonoHandler(opts: RouteDockHonoOptions): MiddlewareHandler {
       if (idempotencyKey) {
         const headers: Record<string, string> = {}
         if (paymentResponseHeader) headers['X-Payment-Response'] = paymentResponseHeader
-        await seenTxStore.set(idempotencyKey, { txHash, headers, createdAt: Date.now() })
+        await recordSettlementSeen(
+          seenTxStore,
+          idempotencyKey,
+          { txHash, headers, createdAt: Date.now() },
+          logger,
+          'x402',
+          opts.onCallbackError,
+        )
       }
 
       if (txHash && opts.onSettled) {
@@ -425,11 +433,14 @@ function createMppChargeHonoHandler(opts: RouteDockHonoOptions): MiddlewareHandl
 
       // Record the settlement so a retry of this exact charge is deduped.
       if (idempotencyKey) {
-        await seenTxStore.set(idempotencyKey, {
-          txHash: reference ?? null,
-          headers: receiptHeaders,
-          createdAt: Date.now(),
-        })
+        await recordSettlementSeen(
+          seenTxStore,
+          idempotencyKey,
+          { txHash: reference ?? null, headers: receiptHeaders, createdAt: Date.now() },
+          logger,
+          'mpp-charge',
+          opts.onCallbackError,
+        )
       }
 
       if (reference && opts.onSettled) {
